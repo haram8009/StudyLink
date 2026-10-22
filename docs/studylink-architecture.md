@@ -46,7 +46,7 @@
 ┌─────────────── Browser (React + Vite, :5173) ───────────────┐
 │  pages/  Home · Workspace · Notes · NoteEdit · Quiz · Review │
 │  api.js  (VITE_USE_MOCK=1 이면 목 응답)                        │
-│  PDF 패널: <iframe src="/api/documents/{id}/file#page=N">    │
+│  PDF 패널: pdf.js 한 쪽 렌더링 + 인용문 하이라이트 상자      │
 └───────────────────────────┬─────────────────────────────────┘
                             │ /api/* (Vite dev proxy)
 ┌───────────────────────────▼─────────────────────────────────┐
@@ -180,6 +180,7 @@ def generate_json(prompt: str, schema: type[BaseModel]) -> BaseModel
       ─► 서버 검증: 제공하지 않은 ID 제거 → 유효 인용 없는 segment 제거
          → 절반 넘게 제거되면 1회 재생성 → 남은 segment 0개면 insufficient_evidence
       ─► 인용 메타(page, quote, document_id/note_id, title)는 서버가 Evidence에서 채움
+         quote는 인용한 문장과 가장 가까운 청크의 1~3줄(최대 160자, services/quotes.py)
       ─► answers 저장(body_json + 검색된 chunk_id·점수) ─► 응답
 ```
 
@@ -286,12 +287,14 @@ HTTP 어댑터는 새로 작성한다. GMS의 채팅·임베딩 경로, 인증 �
 | `/w/:id/chats/:chatId` | 선택 채팅의 질문·답변 기록, 공통 PDF·노트 패널, 답변별 "노트로 만들기" | chat 조회·messages·ask, documents, notes, note-draft |
 | `/notes` | 노트 저장소, 제목 검색 | GET notes |
 | `/notes/new`, `/notes/:id` | 노트 편집(초안 불러오기), 공간 연결, 관련 노트 | notes, related, 연결 API |
+
+노트 편집기(`frontend/src/NoteEditor.jsx`, 2026-10-22): 패널에서는 서식 도구(소제목·굵게·기울임·목록·번호 목록·인용문·코드)와 작성/미리보기 탭을 쓴다. "크게 쓰기"는 화면 전체 오버레이에서 작성과 미리보기를 나란히 보여주고 Esc로 패널에 돌아온다(입력 내용 유지). 입력칸은 본문 길이에 맞춰 늘어난다. Ctrl+B/I는 서식, Ctrl+Enter는 저장. 인용 목록의 [cN]을 누르면 커서 위치에 넣는다. 미리보기와 저장된 노트는 react-markdown + remark-gfm으로 렌더링하고, 본문의 [cN]은 누르면 원본(PDF 쪽 하이라이트 또는 노트)을 여는 칩으로 바꾼다. 저장 형식은 그대로 Markdown 문자열이다.
 | `/w/:id/quiz/:quizId` | 퀴즈 풀이·채점 결과. 새로고침 시 GET quizzes/{id}로 복구 | quizzes, submit |
 | `/w/:id/reviews` | 오답노트 | reviews |
 
 - "노트로 만들기"를 누르면 note-draft 응답을 편집 화면 초기값으로 넘긴다(router state). `fallback: true`면 "요약 없이 답변을 옮겨 담음"을 표시한다.
-- 인용 클릭: 문서 인용이면 PDF 패널 iframe을 `/api/documents/{id}/file#page=N`으로 바꾼다. 같은 파일에서 hash만 바뀌면 브라우저가 페이지를 옮기지 않을 수 있으므로 `key={docId + page}`로 iframe을 다시 마운트한다. 노트 인용이면 노트 미리보기 패널을 연다.
-- 파일 응답은 `Content-Disposition: inline`, `application/pdf`로 보내야 iframe에서 열린다.
+- 인용 클릭: 문서 인용이면 PDF 패널(`frontend/src/PdfPage.jsx`)이 pdf.js로 그 쪽을 패널 너비에 맞춰 그리고, `POST /api/documents/{id}/highlight`로 받은 상자를 겹친 뒤 상자가 보이게 스크롤한다. 서버는 PyMuPDF `search_for`로 인용문의 줄마다 위치를 찾고, 한글·영문 글꼴이 바뀌는 곳에서 나뉜 상자를 줄 단위로 합친다. 같은 줄이 여러 번 나오면 앞 줄에 가장 가까운 것을 고른다. 위치를 못 찾으면 쪽과 인용문 블록만 보인다. 요청마다 `key={docId-page-nonce}`로 다시 마운트한다. 패널 너비가 바뀌면 다시 그린다. 목 모드는 하이라이트 위치를 계산하지 않는다. 노트 인용이면 노트 미리보기 패널을 연다.
+- 파일 응답은 `Content-Disposition: inline`, `application/pdf`로 보낸다("새 탭" 링크가 브라우저 뷰어로 연다).
 - 출처 표시: "자료"와 "내 노트" 인용 배지를 색으로 구분한다(v1.1 7절).
 - 오래 걸리는 요청(퀴즈 생성, 노트 초안)은 버튼을 비활성화하고 진행 상태를 표시한다. 중복 클릭으로 두 번 생성되지 않게 한다.
 
@@ -333,7 +336,7 @@ HTTP 어댑터는 새로 작성한다. GMS의 채팅·임베딩 경로, 인증 �
 | 노트 초안 | LLM 요약 + 인용 ID 제한 + 결정적 fallback | LLM 없이 답변 옮기기 | 읽기 좋은 노트, trace로 품질 확인 가능(결정됨) | LLM 호출 1회 비용·지연, 요약 중 근거 왜곡 가능성(사람이 편집 후 저장해 완화) |
 | 에이전트 구성 | LangGraph StateGraph + GMS HTTP 어댑터 | 프레임워크 없는 함수 조합 | 사용자 지정 기술이며 분기·상태·재시도를 그래프로 표현 | 상태와 노드 계약을 직접 설계해야 함 |
 | 퀴즈 생성 | 요청 안에서 병렬 동기 생성 | 비동기 job + 폴링 | API·화면 단순 | 요청이 수십 초 걸릴 수 있음 |
-| PDF 보기 | 브라우저 내장 뷰어 iframe | pdf.js | 코드 거의 없음 | 하이라이트 불가, 브라우저마다 동작 차이 |
+| PDF 보기 | pdf.js 한 쪽 렌더링 + 서버 PyMuPDF 위치 계산 하이라이트(2026-10-22 변경) | 브라우저 내장 뷰어 iframe(이전 선택) | 인용문을 원문에서 바로 보여줌. 위치 계산을 수집과 같은 PyMuPDF로 해 줄 단위가 일치 | 번들 크기 증가(pdf.js 워커 약 1.4MB), 한 쪽만 보여 쪽 안 텍스트 선택·검색 같은 내장 뷰어 기능은 "새 탭"으로 대신 |
 | 동시성 모델 | 동기 def | async | SQLite·HTTP 어댑터·graph.invoke 호출을 단순하게 연결 | 높은 동시성 처리량 |
 
 ## 11. 성장 시 재검토할 것

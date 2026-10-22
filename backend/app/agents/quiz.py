@@ -17,6 +17,7 @@ from ..adapters import gms
 from ..adapters.telemetry import observe
 from ..schemas.quiz_generation import GeneratedQuestion
 from ..services.quiz_generation import NoValidQuestions, select_quiz_evidence
+from ..services.quotes import pick_quote
 from ..services.retrieval import Evidence
 
 PROMPT_VERSION = 'quiz-v1'
@@ -218,9 +219,11 @@ def collect(state: QuizState):
                 continue
             draft, evidence = result['draft'], by_chunk[result['chunk_id']]
             options, answer_id = shuffle_options(draft, rng)
+            answer_text = next(o['text'] for o in options if o['option_id'] == answer_id)
+            quote = pick_quote(evidence.text, f'{draft.stem} {answer_text} {draft.explanation}')
             questions.append({'stem': draft.stem.strip(), 'options': options, 'answer_option_id': answer_id,
                               'explanation': draft.explanation.strip(), 'document_id': evidence.source_id,
-                              'page': evidence.page, 'quote': evidence.text, 'chunk_id': evidence.chunk_id})
+                              'page': evidence.page, 'quote': quote, 'chunk_id': evidence.chunk_id})
         span.update(output={'valid': len(questions), 'excluded': excluded})
         if not questions:
             if excluded and all(item['reason'] == 'provider' for item in excluded):

@@ -75,6 +75,8 @@ const real = {
   },
   document: (id) => request(`/documents/${enc(id)}`),
   retry: (id) => request(`/documents/${enc(id)}/retry`, { method: "POST" }),
+  // 인용문이 PDF 쪽의 어디에 있는지(PDF 포인트, 왼쪽 위 기준). 쪽 텍스트는 URL에 넣지 않는다.
+  highlight: (id, page, quote) => request(`/documents/${enc(id)}/highlight`, json({ page, quote })),
   // 호환용 워크스페이스 질문. 새 화면은 chatAsk를 사용한다.
   ask: (id, question, include_notes = true) =>
     request(`/workspaces/${enc(id)}/ask`, json({ question, include_notes })),
@@ -473,6 +475,10 @@ const mock = {
           citations,
           fallback: false,
         };
+  },
+  // 목 모드는 서버 PyMuPDF가 없어 하이라이트 위치를 계산하지 않는다(인용문 블록만 보인다).
+  async highlight(_id, page) {
+    return { page, width: 0, height: 0, rects: [] };
   },
   async related({ title, body, exclude_note_id }) {
     await delay();

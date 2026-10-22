@@ -1,7 +1,7 @@
 from fastapi import APIRouter, BackgroundTasks, File, UploadFile
 from fastapi.responses import FileResponse
-from ..schemas.http import WorkspaceCreate, AskRequest
-from ..services import chats, workspaces, documents
+from ..schemas.http import WorkspaceCreate, AskRequest, HighlightRequest
+from ..services import chats, workspaces, documents, quotes
 from ..services.ingest import ingest_document
 from .chats import ask_in_chat
 
@@ -39,6 +39,10 @@ def retry_document(document_id: str, background_tasks: BackgroundTasks):
 def get_document_file(document_id: str):
     path, filename = documents.document_path(document_id)
     return FileResponse(path, media_type='application/pdf', filename=filename, content_disposition_type='inline')
+
+@router.post('/documents/{document_id}/highlight')
+def highlight_quote(document_id: str, body: HighlightRequest):
+    return quotes.find_highlights(document_id, body.page, body.quote)
 
 @router.post('/workspaces/{workspace_id}/ask')
 def ask(workspace_id: str, body: AskRequest):

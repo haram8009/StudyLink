@@ -28,6 +28,8 @@ import {
 } from "lucide-react";
 import { api, isMock, viewerUrl } from "./api";
 import { ErrorBox, Spinner, WorkspaceNav, shortTime } from "./ui";
+import { NoteEditor, NoteMarkdown } from "./NoteEditor";
+import { PdfPage } from "./PdfPage";
 import "./workspace.css";
 
 // 마지막으로 선택한 채팅은 워크스페이스별로 기억한다. 저장소를 못 써도 화면은 동작한다.
@@ -746,11 +748,13 @@ export function DocViewer({ viewer, doc, setViewer }) {
       </div>
       {viewer.quote && <blockquote className="viewer-quote">{viewer.quote}</blockquote>}
       {url ? (
-        // 같은 PDF의 다른 페이지도 확실히 이동하도록 페이지·요청마다 다시 마운트한다.
-        <iframe
+        // pdf.js로 한 쪽을 그리고 인용문 위치를 하이라이트한다. 요청마다 다시 마운트해 스크롤을 맞춘다.
+        <PdfPage
           key={`${viewer.document_id}-${viewer.page}-${viewer.nonce}`}
-          className="pdf-frame"
-          src={`${url}#page=${viewer.page}`}
+          url={url}
+          documentId={viewer.document_id}
+          page={viewer.page}
+          quote={viewer.quote}
           title={`${doc?.filename || "PDF"} ${viewer.page}페이지`}
         />
       ) : (
@@ -849,7 +853,13 @@ export function NotePreview({ noteId, nonce, workspaceId, setViewer, refreshNote
           )}
           <ErrorBox message={actionError} />
           <div className="note-body">
-            {note.body}
+            <NoteMarkdown
+              body={note.body}
+              citations={note.citations || []}
+              onCite={(c) =>
+                openCitation({ ...c, note_id: c.cited_note_id || c.note_id }, `${noteId}:${c.id || c.citation_id}`)
+              }
+            />
           </div>
           {!!note.citations?.length && (
             <div className="note-citations">
@@ -902,128 +912,6 @@ function IndexWarning() {
         <b>검색 제외</b> 색인에 실패해 질문 근거로 쓰이지 않아요. 내용을 확인하고 다시 저장해 주세요.
       </span>
     </div>
-  );
-}
-
-// 노트 작성·수정 UI. 노트 초안도 이 편집기에 채운다(citations는 저장 시 그대로 보낸다).
-// 관련 노트 찾기: 저장 전 제목·본문으로만 검색하고 그 내용은 저장하지 않는다.
-export function NoteEditor({
-  initial,
-  submitLabel = "저장",
-  onSubmit,
-  onCancel,
-  citations = [],
-  excludeNoteId,
-  onOpenNote,
-  extra,
-}) {
-  const [title, setTitle] = useState(initial?.title || ""),
-    [body, setBody] = useState(initial?.body || ""),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
-  const [related, setRelated] = useState(null); // null | { loading, rows, error }
-  async function findRelated() {
-    if (!title.trim() && !body.trim()) return;
-    setRelated({ loading: true, rows: [], error: "" });
-    try {
-      const rows = await api.related({
-        title: title.trim(),
-        body,
-        ...(excludeNoteId ? { exclude_note_id: excludeNoteId } : {}),
-      });
-      setRelated({ loading: false, rows: (rows || []).slice(0, 3), error: "" });
-    } catch (e) {
-      setRelated({ loading: false, rows: [], error: e.message });
-    }
-  }
-  const used = new Set([...body.matchAll(/\[(c\d+)\]/g)].map((m) => m[1]));
-  async function submit(e) {
-    e.preventDefault();
-    if (!title.trim() || !body.trim() || busy) return;
-    setBusy(true);
-    setError("");
-    try {
-      await onSubmit({ title: title.trim(), body });
-    } catch (err) {
-      // 실패해도 입력 내용은 그대로 둔다.
-      setError(err.message);
-      setBusy(false);
-    }
-  }
-  return (
-    <form className="note-editor" onSubmit={submit}>
-      <input
-        aria-label="노트 제목"
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        placeholder="노트 제목"
-        maxLength={200}
-        required
-      />
-      <textarea
-        aria-label="노트 본문"
-        value={body}
-        onChange={(e) => setBody(e.target.value)}
-        placeholder="Markdown으로 정리해 보세요."
-        rows={7}
-        required
-      />
-      {!!citations.length && (
-        <div className="draft-citations" aria-label="노트 인용">
-          {citations.map((c) => (
-            <span key={c.id} className={used.has(c.id) ? "" : "unused"} title={c.quote || ""}>
-              [{c.id}] {c.source_type === "note" ? "내 노트" : `자료 ${c.page}페이지`}
-            </span>
-          ))}
-          <small>본문에서 지운 [cN] 인용은 저장되지 않아요.</small>
-        </div>
-      )}
-      <div className="related-box">
-        <button
-          type="button"
-          className="text-button"
-          onClick={findRelated}
-          disabled={related?.loading || (!title.trim() && !body.trim())}
-        >
-          {related?.loading ? <LoaderCircle size={13} className="spin" /> : <Search size={13} />}
-          관련 노트 찾기
-        </button>
-        {related && !related.loading && (
-          <div className="related-list">
-            <ErrorBox message={related.error} />
-            {!related.error && !related.rows.length && (
-              <p className="subtle-empty">관련된 이전 노트를 찾지 못했어요.</p>
-            )}
-            {related.rows.map((n) => (
-              <div className="related-row" key={n.note_id}>
-                <div>
-                  <strong>{n.title}</strong>
-                  {n.snippet && <p>{n.snippet}</p>}
-                </div>
-                {onOpenNote && (
-                  <button type="button" className="text-button" onClick={() => onOpenNote(n.note_id)}>
-                    열기
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-      {extra}
-      <ErrorBox message={error} />
-      <div className="note-editor-actions">
-        {onCancel && (
-          <button type="button" className="secondary" onClick={onCancel} disabled={busy}>
-            취소
-          </button>
-        )}
-        <button className="primary" disabled={busy || !title.trim() || !body.trim()}>
-          {busy ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}
-          {busy ? "저장 중…" : submitLabel}
-        </button>
-      </div>
-    </form>
   );
 }
 

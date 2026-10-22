@@ -153,7 +153,8 @@ def test_normal_five_questions_with_evidence_fields_from_chunks(monkeypatch):
     for question in result['questions']:
         chunk = chunks[question['chunk_id']]
         assert question['document_id'] == chunk['source_id'] and question['page'] == chunk['page']
-        assert question['quote'] == chunk['text']
+        # The quote is a short exact part of the chunk (services/quotes.py), not the whole chunk.
+        assert question['quote'] and question['quote'] in chunk['text'] and len(question['quote']) <= 160
         assert question['stem'].startswith(question['chunk_id'])  # the stem came from that chunk's branch
         assert [option['option_id'] for option in question['options']] == list('abcd')
         assert set(question) == {'stem', 'options', 'answer_option_id', 'explanation', 'document_id', 'page', 'quote', 'chunk_id'}

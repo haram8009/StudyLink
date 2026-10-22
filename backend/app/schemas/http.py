@@ -11,6 +11,11 @@ class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
     include_notes: bool = True
 
+class HighlightRequest(BaseModel):
+    """Quote text to locate on one PDF page (body, not query string, so page text stays out of URLs)."""
+    page: int = Field(ge=1)
+    quote: str = Field(min_length=1, max_length=4000)
+
 class ChatCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
     title: str | None = Field(default=None, max_length=200)

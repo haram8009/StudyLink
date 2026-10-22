@@ -527,14 +527,25 @@ button.option:hover:not(:disabled) {
   gap: 5px;
   align-items: center;
 }
-.draft-citations span {
+.draft-citations span,
+.draft-citations button {
   font-size: 9px;
   background: #edf3e5;
   color: #6c8460;
   border-radius: 4px;
   padding: 2px 6px;
 }
-.draft-citations span.unused {
+.draft-citations button {
+  border: 1px solid #dbe7d0;
+  cursor: pointer;
+  font-size: 10px;
+  padding: 3px 7px;
+}
+.draft-citations button:hover:not(:disabled) {
+  background: #e2edd6;
+}
+.draft-citations span.unused,
+.draft-citations button.unused {
   text-decoration: line-through;
   opacity: 0.6;
 }

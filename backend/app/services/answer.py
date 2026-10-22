@@ -9,6 +9,7 @@ from ..agents.answer import answer_graph
 from ..config import get_settings
 from ..db import get_connection
 from ..schemas.answer import AnswerOut, Citation
+from .quotes import pick_quote
 
 def answer_question(workspace_id: str, question: str, include_notes: bool = True, *,
                     chat_id: str | None = None, history: Sequence[dict] = ()) -> AnswerOut:
@@ -25,10 +26,12 @@ def answer_question(workspace_id: str, question: str, include_notes: bool = True
         check_deadline(deadline)
         segments = state['segments']
         used = {value for segment in segments for value in segment.citation_ids}
+        # The quote is the short part of the chunk closest to the sentences that cite it.
+        citing = {key: ' '.join(s.text for s in segments if key in s.citation_ids) for key in used}
         citations = [Citation(id=f'e{i}', source_type=item.source_type,
             document_id=item.source_id if item.source_type == 'doc' else None,
             note_id=item.source_id if item.source_type == 'note' else None,
-            page=item.page, title=item.title, quote=item.text)
+            page=item.page, title=item.title, quote=pick_quote(item.text, citing[f'e{i}']))
             for i, item in enumerate(state['evidence'], 1) if f'e{i}' in used]
         answer = AnswerOut(answer_id=answer_id, status='grounded' if segments else 'insufficient_evidence', segments=segments, citations=citations)
         stored = answer.model_dump()
