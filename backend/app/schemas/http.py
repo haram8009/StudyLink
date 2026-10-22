@@ -47,3 +47,19 @@ class NoteUpdate(BaseModel):
     body: str = Field(min_length=1, max_length=100_000)
     citations: list[NoteCitationIn] = Field(default_factory=list)
     workspace_ids: list[str] | None = None
+
+class QuizCreate(BaseModel):
+    count: int = Field(default=5, ge=1, le=5)
+
+class QuizSubmit(BaseModel):
+    """answers: {question_id: option_id}; completeness is checked against the stored quiz."""
+    answers: dict[str, str]
+
+class ReviewUpdate(BaseModel):
+    learner_reason: str | None = Field(default=None, max_length=2000)
+    status: Literal['open', 'reviewed'] | None = None
+
+class RelatedNotesRequest(BaseModel):
+    title: str = Field(default='', max_length=200)
+    body: str = Field(default='', max_length=100_000)
+    exclude_note_id: str | None = None

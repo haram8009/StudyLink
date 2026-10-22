@@ -82,7 +82,7 @@
 
 ### 채팅과 공통 자원 보완 (2026-10-21)
 
-[ADR 0002](adr/0002-workspace-chats-shared-resources.md)에 따라 workspace → chats → answers 관계를 추가한다. PDF와 연결 노트의 소유·검색 범위는 workspace에 유지한다. 채팅 서비스는 목록·생성·조회·시간순 완료 대화·기존 답변 이관을 책임진다. 답변 서비스의 내부 계약은 `answer_question(workspace_id, question, include_notes=True, *, chat_id=None, history=())`로 확장한다. 기존 평가 호출은 문맥 없는 호출로 호환한다. 구현(2026-10-21): 답변 그래프는 interpret → retrieve → (근거가 약하면 research 1회) → generate → validate 순서이며, 프롬프트 버전은 answer-v2·query-followup-v1·query-research-v1이다. 답변 생성에는 최근 3쌍·답변당 600자만 넣고 과거 인용 표시는 지운다. 노트 저장 후 색인은 `services/note_index.index_note(note_id)`가 맡고 예외를 밖으로 던지지 않는다. 결과는 [2일차 통합 기록](day2-integration.md)을 따른다.
+[ADR 0002](adr/0002-workspace-chats-shared-resources.md)에 따라 workspace → chats → answers 관계를 추가한다. PDF와 연결 노트의 소유·검색 범위는 workspace에 유지한다. 채팅 서비스는 목록·생성·조회·시간순 완료 대화·기존 답변 이관을 책임진다. 답변 서비스의 내부 계약은 `answer_question(workspace_id, question, include_notes=True, *, chat_id=None, history=())`로 확장한다. 기존 평가 호출은 문맥 없는 호출로 호환한다. 구현(2026-10-21): 답변 그래프는 interpret → retrieve → (근거가 약하면 research 1회) → generate → validate → (grounded이고 근거에 노트가 있으면 link_notes) 순서이며, 프롬프트 버전은 answer-v4·note-link-v1·query-followup-v1·query-research-v1이다(2026-10-22). answer-v4는 출력에 answerable 판정을 segments보다 먼저 두고 false면 보류하며, 답변 생성은 temperature 0이다. link_notes는 답변 문장과 근거 중 노트만 보고 답변에 나온 용어를 노트 내용으로 풀어 주는 문장을 노트 인용으로 덧붙인다. 답변 프롬프트 안에서 노트 인용을 요구하는 방식은 근거가 많을 때 지켜지지 않아(5회 중 0~2회) 별도 호출로 분리했다. link_notes가 실패하면 문장만 덧붙이지 않고 답변은 유지한다. 답변 생성에는 최근 3쌍·답변당 600자만 넣고 과거 인용 표시는 지운다. 노트 저장 후 색인은 `services/note_index.index_note(note_id)`가 맡고 예외를 밖으로 던지지 않는다. 결과는 [2일차 통합 기록](day2-integration.md)을 따른다.
 
 채팅 HTTP 요청은 서버에서 chat의 workspace를 확인하고, 동일 chat의 생성 요청을 잠가 중복 요청에 409를 반환한다. 최근 완료 대화 최대 6쌍을 읽어 최대 12,000자로 제한한 문맥을 전달한다. 후속 질문 해석 → workspace 자료·연결 노트 검색 → 생성·검증 → chat에 결과 저장 순서다. 과거 답변은 질문 해석을 돕지만 이번 답변의 인용 근거가 아니다. 새 검색에서 선택한 근거 ID만 허용한다. 전체 요청의 30초 예산을 공유한다.
 
@@ -103,21 +103,22 @@ class Evidence:
 
 # services/ingest.py
 def ingest_document(document_id: str) -> None        # 상태 갱신까지 책임
-# services/indexing.py
-def index_note(note_id: str) -> None                 # 기존 청크 삭제 후 재생성
+# services/note_index.py
+def index_note(note_id: str) -> str                  # 청크 교체 후 'ok'|'failed', 예외 미전파
 # services/retrieval.py
 def retrieve(workspace_id: str, query: str, *,
              include_notes=True) -> list[Evidence]  # 점수순, 4.2절 선택 규칙 적용
-def related_notes(text: str, *, exclude_note_id: str | None = None,
-                  k=3) -> list[Evidence]           # 전체 노트, note_id당 1개
+# services/related_notes.py
+def related_notes(text: str, exclude_note_id: str | None = None,
+                  k=3) -> list[dict]                # 전체 노트, note_id당 1개: note_id, title, snippet(점수 미노출)
 # services/answer.py
-def answer_question(workspace_id: str, question: str,
-                    include_notes: bool) -> AnswerOut   # v1.1 6절 응답 형식
+def answer_question(workspace_id: str, question: str, include_notes=True, *,
+                    chat_id=None, history=()) -> AnswerOut
 # services/note_draft.py
-def draft_note(answer_id: str) -> NoteDraftOut         # title, body(Markdown), citations, fallback
-# services/quiz.py
-def generate_quiz(workspace_id: str, count=5) -> str   # quiz_id
-def grade(quiz_id: str, picks: dict[str, str]) -> GradeOut
+def draft_note(answer_id: str) -> dict                 # title, body, citations(노트 저장 입력 형식 id=cN), fallback
+# services/quiz_generation.py (C, 저장 안 함) → services/quizzes.py (B, 저장·채점)
+def generate_quiz_questions(workspace_id: str, count=5) -> dict  # requested_count, 검증·섞기 완료 문항
+def submit_quiz(quiz_id: str, answers: dict[str, str]) -> QuizGraded
 # adapters/gms.py
 def embed(texts: list[str]) -> np.ndarray              # (n, dim) float32
 def generate_json(prompt: str, schema: type[BaseModel]) -> BaseModel
@@ -197,7 +198,7 @@ SELECT c.* FROM chunks c
 **근거 선택 규칙(P1, 2026-10-21 결정)**
 
 1. 최소 점수(`MIN_SCORE`) 이상인 후보만 남긴다. 0개면 근거가 약한 것으로 보고 재검색 또는 보류로 간다(3.1절).
-2. 1등 점수와의 차이가 `RELATIVE_MARGIN`(초기값 예: 0.1) 이내인 후보만 남긴다.
+2. 1등 점수와의 차이가 `RELATIVE_MARGIN`(0.15, 2026-10-22 3일차 평가로 보정. 0.1에서는 노트 점수가 자료보다 높을 때 자료 페이지가 빠졌다) 이내인 후보만 남긴다.
 3. 점수순으로 담다가 `MAX_EVIDENCE`(12개) 또는 근거 텍스트 합 `MAX_EVIDENCE_CHARS`(약 8,000자)에 먼저 닿으면 멈춘다.
 4. 1단계를 통과한 노트가 있는데 결과에 노트가 없으면, 최고 점수 노트 1개를 넣는다. 상한을 넘으면 마지막 문서 근거를 빼고 넣는다.
 
@@ -241,7 +242,8 @@ SELECT c.* FROM chunks c
 4. 응답 분리: Pydantic 응답 모델을 `QuestionPublic`(정답·해설 없음)과 `QuestionGraded`로 나눈다. 정답 누출을 필드 누락 실수가 아니라 타입으로 막는다.
 5. 제출(2026-10-21 결정, 점검 R6): 퀴즈당 1회로 확정한다. 입력 검증(전 문항 응답, 해당 퀴즈의 question_id·option_id) 실패는 422이며 아무것도 쓰지 않는다. `quizzes.submitted_at`이 이미 있으면 채점하지 않고 저장된 attempts로 결과를 다시 만들어 200으로 돌려준다. 아니면 한 트랜잭션에서 submitted_at이 NULL인 경우에만 갱신(`UPDATE ... WHERE submitted_at IS NULL`)하고, attempts insert와 오답 reviews insert(question_id UNIQUE, status=open)를 함께 커밋한다. 갱신 행이 0이면 동시 제출로 보고 저장된 결과를 반환한다.
 5-1. 부분 생성: 유효 문항이 1~4개면 그대로 저장하고 requested_count·actual_count를 응답에 넣는다. 화면은 "N문항만 만들었습니다"를 표시한다.
-6. 오답노트의 관련 노트는 저장하지 않는다. 조회할 때 "문제 + 정답 텍스트"로 노트를 검색해 즉석 계산한다.
+6. 오답노트의 관련 노트는 저장하지 않는다. 오답 단건을 조회할 때 "문제 + 정답 텍스트"로 노트를 검색해 즉석 계산한다. 목록 조회에는 넣지 않는다.
+7. 3일차 보완([3일차 PRD](studylink-day3-prd.md)): 퀴즈·오답은 워크스페이스에 속하고 채팅과 무관하다. 검증 통과 문항의 선택지 순서는 서버가 섞고 option_id를 다시 매긴다. questions에 quote·chunk_id를 추가한다. 같은 워크스페이스의 퀴즈 생성 중 재요청은 409다.
 
 ## 5. 데이터 모델 보완
 

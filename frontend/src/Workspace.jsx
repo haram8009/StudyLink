@@ -9,6 +9,7 @@ import {
   ChevronRight,
   ExternalLink,
   FileText,
+  FileX,
   Layers,
   Link2,
   LoaderCircle,
@@ -22,10 +23,11 @@ import {
   TriangleAlert,
   Unlink,
   Upload,
+  WandSparkles,
   X,
 } from "lucide-react";
 import { api, isMock, viewerUrl } from "./api";
-import { ErrorBox, Spinner } from "./ui";
+import { ErrorBox, Spinner, WorkspaceNav, shortTime } from "./ui";
 import "./workspace.css";
 
 // 마지막으로 선택한 채팅은 워크스페이스별로 기억한다. 저장소를 못 써도 화면은 동작한다.
@@ -46,14 +48,6 @@ function writeLastChat(id, chatId) {
 }
 const byUpdated = (a, b) => (b.updated_at || "").localeCompare(a.updated_at || "");
 const NEW_DRAFT = "__new__";
-function shortTime(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toDateString() === new Date().toDateString()
-    ? d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })
-    : d.toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
-}
 const noteSummary = ({ id, title, index_status, updated_at }) => ({
   id,
   title,
@@ -78,6 +72,9 @@ export function Workspace() {
   // 공통 자원 패널: 채팅을 바꿔도 유지되는 워크스페이스 단위 상태
   const [viewer, setViewer] = useState(null),
     [tab, setTab] = useState("docs");
+  // 3일차: 답변에서 만든 노트 초안(저장 전). 공통 자원 패널의 노트 작성 UI에 채운다.
+  const [noteDraft, setNoteDraft] = useState(null),
+    [drafting, setDrafting] = useState({}); // answer_id -> { busy, error }
   const threadsRef = useRef(threads);
   threadsRef.current = threads;
 
@@ -245,6 +242,19 @@ export function Workspace() {
       });
     }
   }
+  async function makeDraft(message) {
+    const answerId = message.answer_id;
+    if (!answerId || drafting[answerId]?.busy) return;
+    setDrafting((d) => ({ ...d, [answerId]: { busy: true, error: "" } }));
+    try {
+      const draft = await api.draft(answerId);
+      setNoteDraft({ ...draft, answer_id: answerId, nonce: Date.now() });
+      setTab("notes");
+      setDrafting((d) => ({ ...d, [answerId]: { busy: false, error: "" } }));
+    } catch (e) {
+      setDrafting((d) => ({ ...d, [answerId]: { busy: false, error: e.message } }));
+    }
+  }
   const refreshNotes = () =>
     api
       .notes("", id)
@@ -284,6 +294,7 @@ export function Workspace() {
           <p>{workspace.goal || "자료를 읽고, 질문하며 배움을 연결해 보세요."}</p>
         </div>
       </div>
+      <WorkspaceNav id={id} />
       <div className="chat-layout">
         <ChatList
           chats={chats}
@@ -312,6 +323,8 @@ export function Workspace() {
             viewer={viewer}
             onCitation={openCitation}
             onReload={() => loadMessages(activeId)}
+            drafting={drafting}
+            onDraft={makeDraft}
           />
           <form className="question-form" onSubmit={ask}>
             <div className="question-input">
@@ -368,6 +381,8 @@ export function Workspace() {
           setTab={setTab}
           refreshNotes={refreshNotes}
           openCitation={openCitation}
+          noteDraft={noteDraft}
+          clearDraft={() => setNoteDraft(null)}
         />
       </div>
     </div>
@@ -422,7 +437,7 @@ function ChatList({ chats, activeId, threads, creating, error, onSelect, onCreat
   );
 }
 
-function Thread({ thread, hasChat, docs, viewer, onCitation, onReload }) {
+function Thread({ thread, hasChat, docs, viewer, onCitation, onReload, drafting, onDraft }) {
   const endRef = useRef(null);
   const messages = thread.messages || [];
   useEffect(() => {
@@ -460,6 +475,8 @@ function Thread({ thread, hasChat, docs, viewer, onCitation, onReload }) {
               docs={docs}
               viewer={viewer}
               onCitation={onCitation}
+              drafting={drafting?.[m.answer_id]}
+              onDraft={onDraft}
             />
           ))}
           {thread.pending && (
@@ -481,7 +498,7 @@ function citationLabel(c, docs) {
   return docs.find((d) => d.id === c.document_id)?.filename || c.title || "자료";
 }
 
-function Turn({ message, docs, viewer, onCitation }) {
+function Turn({ message, docs, viewer, onCitation, drafting, onDraft }) {
   const citations = message.citations || [];
   const segments = (message.segments || [])
     .map((s) => ({
@@ -494,6 +511,23 @@ function Turn({ message, docs, viewer, onCitation }) {
       citations.find((c) => c.id === cid),
       `${message.answer_id}:${cid}`,
     );
+  const insufficient = message.status === "insufficient_evidence" || !segments.length;
+  // 근거 부족 답변은 노트 초안을 만들 수 없다(서버도 422).
+  const draftButton = message.answer_id && (
+    <div className="answer-actions">
+      <button
+        className="secondary small"
+        onClick={() => onDraft(message)}
+        disabled={insufficient || drafting?.busy}
+        title={insufficient ? "근거가 부족한 답변은 노트로 만들 수 없어요" : "답변을 요약한 노트 초안을 만들어요"}
+      >
+        {drafting?.busy ? <LoaderCircle size={13} className="spin" /> : <WandSparkles size={13} />}
+        {drafting?.busy ? "초안 만드는 중…" : "노트로 만들기"}
+      </button>
+      {insufficient && <small>근거가 부족한 답변은 노트로 만들 수 없어요.</small>}
+      <ErrorBox message={drafting?.error} />
+    </div>
+  );
   return (
     <div className="turn">
       <div className="question-bubble">{message.question}</div>
@@ -504,7 +538,7 @@ function Turn({ message, docs, viewer, onCitation }) {
           </span>
           StudyLink<span>{shortTime(message.created_at)} · 자료 기반 답변</span>
         </div>
-        {message.status === "insufficient_evidence" || !segments.length ? (
+        {insufficient ? (
           <div className="insufficient">
             <h3>자료에서 확인하지 못함</h3>
             <p>
@@ -551,6 +585,7 @@ function Turn({ message, docs, viewer, onCitation }) {
             ))}
           </>
         )}
+        {draftButton}
       </div>
     </div>
   );
@@ -569,6 +604,8 @@ function ResourcePanel({
   setTab,
   refreshNotes,
   openCitation,
+  noteDraft,
+  clearDraft,
 }) {
   const viewerRef = useRef(null);
   useEffect(() => {
@@ -641,14 +678,18 @@ function ResourcePanel({
           viewer={viewer}
           setViewer={setViewer}
           refreshNotes={refreshNotes}
+          noteDraft={noteDraft}
+          clearDraft={clearDraft}
         />
       )}
     </aside>
   );
 }
 
-function DocViewer({ viewer, doc, setViewer }) {
-  const url = viewerUrl(viewer.document_id);
+export function DocViewer({ viewer, doc, setViewer }) {
+  // 자료가 삭제됐거나 처리 실패 상태면 페이지 이동 대신 "원문을 열 수 없음"을 보인다.
+  const unavailable = !doc || doc.status !== "ready";
+  const url = unavailable ? null : viewerUrl(viewer.document_id);
   const pages = doc?.page_count || null;
   const go = (page) => setViewer({ ...viewer, page, quote: null, from: null, nonce: Date.now() });
   return (
@@ -656,12 +697,27 @@ function DocViewer({ viewer, doc, setViewer }) {
       <div className="viewer-head">
         <div>
           <span className="source-badge doc">자료</span>
-          <strong>{doc?.filename || "자료"}</strong>
+          <strong>{doc?.filename || viewer.filename || "자료"}</strong>
         </div>
         <button className="icon-button" aria-label="열람 닫기" onClick={() => setViewer(null)}>
           <X size={18} />
         </button>
       </div>
+      {unavailable ? (
+        <>
+          {viewer.quote && <blockquote className="viewer-quote">{viewer.quote}</blockquote>}
+          <div className="pdf-placeholder unavailable" role="status">
+            <FileX size={30} />
+            <strong>원문을 열 수 없음</strong>
+            <p>
+              자료가 삭제됐거나 처리에 실패해 {viewer.page}페이지를 열 수 없어요.
+              <br />
+              기록과 발췌는 그대로 남아 있어요.
+            </p>
+          </div>
+        </>
+      ) : (
+      <>
       <div className="page-nav">
         <button
           className="icon-button"
@@ -708,11 +764,13 @@ function DocViewer({ viewer, doc, setViewer }) {
           </p>
         </div>
       )}
+      </>
+      )}
     </>
   );
 }
 
-function NotePreview({ noteId, nonce, workspaceId, setViewer, refreshNotes, openCitation }) {
+export function NotePreview({ noteId, nonce, workspaceId, setViewer, refreshNotes, openCitation }) {
   const [note, setNote] = useState(null),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
@@ -774,6 +832,8 @@ function NotePreview({ noteId, nonce, workspaceId, setViewer, refreshNotes, open
           submitLabel="다시 저장"
           onSubmit={save}
           onCancel={() => setEditing(false)}
+          citations={note.citations || []}
+          excludeNoteId={noteId}
         />
       ) : (
         <div className="note-preview">
@@ -845,11 +905,38 @@ function IndexWarning() {
   );
 }
 
-function NoteEditor({ initial, submitLabel = "저장", onSubmit, onCancel }) {
+// 노트 작성·수정 UI. 노트 초안도 이 편집기에 채운다(citations는 저장 시 그대로 보낸다).
+// 관련 노트 찾기: 저장 전 제목·본문으로만 검색하고 그 내용은 저장하지 않는다.
+export function NoteEditor({
+  initial,
+  submitLabel = "저장",
+  onSubmit,
+  onCancel,
+  citations = [],
+  excludeNoteId,
+  onOpenNote,
+  extra,
+}) {
   const [title, setTitle] = useState(initial?.title || ""),
     [body, setBody] = useState(initial?.body || ""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const [related, setRelated] = useState(null); // null | { loading, rows, error }
+  async function findRelated() {
+    if (!title.trim() && !body.trim()) return;
+    setRelated({ loading: true, rows: [], error: "" });
+    try {
+      const rows = await api.related({
+        title: title.trim(),
+        body,
+        ...(excludeNoteId ? { exclude_note_id: excludeNoteId } : {}),
+      });
+      setRelated({ loading: false, rows: (rows || []).slice(0, 3), error: "" });
+    } catch (e) {
+      setRelated({ loading: false, rows: [], error: e.message });
+    }
+  }
+  const used = new Set([...body.matchAll(/\[(c\d+)\]/g)].map((m) => m[1]));
   async function submit(e) {
     e.preventDefault();
     if (!title.trim() || !body.trim() || busy) return;
@@ -881,6 +968,49 @@ function NoteEditor({ initial, submitLabel = "저장", onSubmit, onCancel }) {
         rows={7}
         required
       />
+      {!!citations.length && (
+        <div className="draft-citations" aria-label="노트 인용">
+          {citations.map((c) => (
+            <span key={c.id} className={used.has(c.id) ? "" : "unused"} title={c.quote || ""}>
+              [{c.id}] {c.source_type === "note" ? "내 노트" : `자료 ${c.page}페이지`}
+            </span>
+          ))}
+          <small>본문에서 지운 [cN] 인용은 저장되지 않아요.</small>
+        </div>
+      )}
+      <div className="related-box">
+        <button
+          type="button"
+          className="text-button"
+          onClick={findRelated}
+          disabled={related?.loading || (!title.trim() && !body.trim())}
+        >
+          {related?.loading ? <LoaderCircle size={13} className="spin" /> : <Search size={13} />}
+          관련 노트 찾기
+        </button>
+        {related && !related.loading && (
+          <div className="related-list">
+            <ErrorBox message={related.error} />
+            {!related.error && !related.rows.length && (
+              <p className="subtle-empty">관련된 이전 노트를 찾지 못했어요.</p>
+            )}
+            {related.rows.map((n) => (
+              <div className="related-row" key={n.note_id}>
+                <div>
+                  <strong>{n.title}</strong>
+                  {n.snippet && <p>{n.snippet}</p>}
+                </div>
+                {onOpenNote && (
+                  <button type="button" className="text-button" onClick={() => onOpenNote(n.note_id)}>
+                    열기
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      {extra}
       <ErrorBox message={error} />
       <div className="note-editor-actions">
         {onCancel && (
@@ -1038,7 +1168,27 @@ function DocsTab({ workspace, setWorkspace, pollError, viewer, setViewer }) {
   );
 }
 
-function NotesTab({ workspaceId, notes, viewer, setViewer, refreshNotes }) {
+function NotesTab({ workspaceId, notes, viewer, setViewer, refreshNotes, noteDraft, clearDraft }) {
+  const [linkDraft, setLinkDraft] = useState(true);
+  const draftRef = useRef(null);
+  useEffect(() => {
+    if (noteDraft) {
+      setLinkDraft(true);
+      draftRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [noteDraft?.nonce]);
+  async function saveDraft(value) {
+    // 기본 연결 대상은 답변이 속한 현재 워크스페이스다.
+    const note = await api.saveNote(null, {
+      ...value,
+      workspace_ids: linkDraft ? [workspaceId] : [],
+      citations: noteDraft.citations || [],
+    });
+    clearDraft();
+    refreshNotes().catch(() => {});
+    setViewer({ kind: "note", note_id: note.id, nonce: Date.now() });
+  }
+  const openNote = (noteId) => setViewer({ kind: "note", note_id: noteId, nonce: Date.now() });
   // 열려 있는 노트의 연결 상태가 바뀌면 미리보기를 다시 불러온다.
   const touchNote = (noteId) =>
     setViewer((v) => (v?.kind === "note" && v.note_id === noteId ? { ...v, nonce: Date.now() } : v));
@@ -1090,9 +1240,51 @@ function NotesTab({ workspaceId, notes, viewer, setViewer, refreshNotes }) {
           onLinked={touchNote}
         />
       )}
+      {noteDraft && (
+        <div className="note-new draft" ref={draftRef}>
+          <div className="draft-head">
+            <WandSparkles size={14} />
+            <strong>답변에서 만든 노트 초안</strong>
+            <small>저장하기 전에는 노트가 아니에요</small>
+          </div>
+          {noteDraft.fallback && (
+            <div className="note-warning" role="status">
+              <TriangleAlert size={14} />
+              <span>
+                <b>요약 없이 답변을 옮겨 담음</b> 요약을 만들지 못해 답변 문장을 그대로 옮겼어요. 다듬어서
+                저장해 주세요.
+              </span>
+            </div>
+          )}
+          <NoteEditor
+            key={noteDraft.nonce}
+            initial={noteDraft}
+            citations={noteDraft.citations || []}
+            submitLabel="노트로 저장"
+            onSubmit={saveDraft}
+            onCancel={clearDraft}
+            onOpenNote={openNote}
+            extra={
+              <label className="include-toggle">
+                <input
+                  type="checkbox"
+                  checked={linkDraft}
+                  onChange={(e) => setLinkDraft(e.target.checked)}
+                />
+                이 워크스페이스에 연결
+              </label>
+            }
+          />
+        </div>
+      )}
       {mode === "new" && (
         <div className="note-new">
-          <NoteEditor submitLabel="저장하고 연결" onSubmit={create} onCancel={() => setMode(null)} />
+          <NoteEditor
+            submitLabel="저장하고 연결"
+            onSubmit={create}
+            onCancel={() => setMode(null)}
+            onOpenNote={openNote}
+          />
         </div>
       )}
       <ErrorBox message={error} />

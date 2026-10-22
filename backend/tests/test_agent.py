@@ -57,7 +57,7 @@ def test_no_candidates_and_processing():
 
 def test_grounded_answer_filters_invalid_segments_and_persists(monkeypatch):
     add(); fixed_query(monkeypatch)
-    monkeypatch.setattr(gms, 'generate_json', lambda *args, **kwargs: GeneratedAnswer.model_validate({'segments': [
+    monkeypatch.setattr(gms, 'generate_json', lambda *args, **kwargs: GeneratedAnswer.model_validate({'answerable': True, 'segments': [
         {'text': 'grounded', 'citation_ids': ['e1','invented']}, {'text': 'unsupported', 'citation_ids': ['e99']}]}))
     result = answer_question('w', 'q')
     assert result.status == 'grounded'
@@ -68,6 +68,18 @@ def test_grounded_answer_filters_invalid_segments_and_persists(monkeypatch):
         stored = json.loads(db.execute('SELECT body_json FROM answers').fetchone()[0])
         assert stored['retrieval'][0]['chunk_id'] == 'd'
         assert stored['retrieval'][0]['score'] == pytest.approx(1.0)
+
+def test_unanswerable_judgment_abstains_without_retry(monkeypatch):
+    add(); fixed_query(monkeypatch)
+    calls = []
+    def fake(*args, **kwargs):
+        calls.append(1)
+        return GeneratedAnswer.model_validate({'answerable': False, 'segments': [
+            {'text': '직접적인 언급은 없으나 관련 내용이 있다', 'citation_ids': ['e1']}]})
+    monkeypatch.setattr(gms, 'generate_json', fake)
+    result = answer_question('w', 'q')
+    assert result.status == 'insufficient_evidence' and result.segments == [] and result.citations == []
+    assert len(calls) == 1
 
 @pytest.mark.parametrize('scenario', ['invalid_json', 'invalid_citation', 'insufficient'])
 def test_output_failure_terminates_with_abstention(monkeypatch, scenario):

@@ -1,0 +1,71 @@
+{
+  "version": "eval-questions-v1",
+  "created": "2026-10-22",
+  "notes_for_humans": "답 있음 10개(워드 임베딩 5, Transformer 5), 답 없음 5개(그림에만 있는 내용 3, 자료에 없는 주제 2). 기대 페이지는 PyMuPDF 추출 텍스트 기준. 자동 비교는 사람 판정이 아니다.",
+  "documents": {
+    "word_embedding": {
+      "filename": "AI_지식_정리_노트_워드_임베딩.pdf",
+      "pages": 5,
+      "workspace": "nlp"
+    },
+    "transformer": {
+      "filename": "AI_지식_정리_노트_-_Transformer__LLM_파운데이션_모델.pdf",
+      "pages": 11,
+      "workspace": "llm"
+    }
+  },
+  "workspaces": {
+    "nlp": {"title": "자연어처리 기초", "goal": "워드 임베딩과 RNN 계열 모델 이해"},
+    "llm": {"title": "LLM", "goal": "Transformer와 파운데이션 모델 이해"}
+  },
+  "note": {
+    "key": "vanishing_gradient",
+    "title": "기울기 소실 정리",
+    "comment": "데모 2단계에서 'Vanishing gradient가 뭐야?' 답변으로 만든 노트를 흉내 낸 고정 본문. 원 답변 범위를 넘는 내용(Residual 언급 등)은 넣지 않았다.",
+    "body": "기울기 소실(Vanishing gradient)은 RNN을 역전파로 학습할 때 시점을 거슬러 올라갈수록 오래된 시점의 gradient가 지수적으로 0에 가까워지는 문제다. 그래서 과거 시점의 정보가 갈수록 희미해지고 장기 의존성을 학습하기 어렵다. [c1]\n\nLSTM은 이 문제를 완화하려고 만든 모델로, 장기 정보를 저장하는 cell state와 forget·input·output 게이트를 추가했다. [c1]",
+    "citations": [
+      {"id": "c1", "source_type": "doc", "source": "word_embedding", "page": 3,
+       "quote": "Vanishing Gradient 문제: 역전파시 시점 거슬러 올라갈 수록 오래된 시점의 gradient가 지수적으로 0에 가까워진다."}
+    ],
+    "workspaces": ["nlp", "llm"],
+    "variants": {
+      "edited": {
+        "comment": "진단용(--note-variant edited). 학습자가 초안 편집 때 한 문장을 덧붙인 경우. 기본 평가에는 쓰지 않는다.",
+        "body": "기울기 소실(Vanishing gradient)은 RNN을 역전파로 학습할 때 시점을 거슬러 올라갈수록 오래된 시점의 gradient가 지수적으로 0에 가까워지는 문제다. 그래서 과거 시점의 정보가 갈수록 희미해지고 장기 의존성을 학습하기 어렵다. [c1]\n\nLSTM은 이 문제를 완화하려고 만든 모델로, 장기 정보를 저장하는 cell state와 forget·input·output 게이트를 추가했다. [c1]\n\n내 메모: 층이 깊은 신경망에서도 역전파 때 앞쪽 층으로 갈수록 기울기가 작아져 학습이 어려워진다."
+      }
+    }
+  },
+  "questions": [
+    {"id": "A01", "kind": "answerable", "workspace": "nlp", "question": "Vanishing gradient가 뭐야?",
+     "expected_source": "word_embedding", "expected_pages": [3], "comment": "데모 1단계 질문"},
+    {"id": "A02", "kind": "answerable", "workspace": "nlp", "question": "LSTM의 forget gate는 무슨 역할을 해?",
+     "expected_source": "word_embedding", "expected_pages": [3]},
+    {"id": "A03", "kind": "answerable", "workspace": "nlp", "question": "one-hot 인코딩의 문제점은 뭐야?",
+     "expected_source": "word_embedding", "expected_pages": [1]},
+    {"id": "A04", "kind": "answerable", "workspace": "nlp", "question": "seq2seq 학습에서 teacher forcing은 왜 쓰는 거야?",
+     "expected_source": "word_embedding", "expected_pages": [4]},
+    {"id": "A05", "kind": "answerable", "workspace": "nlp", "question": "seq2seq의 bottleneck 문제를 어텐션은 어떻게 해결해?",
+     "expected_source": "word_embedding", "expected_pages": [4]},
+    {"id": "A06", "kind": "answerable", "workspace": "llm", "question": "Transformer는 RNN의 어떤 문제를 해결했어?",
+     "expected_source": "transformer", "expected_pages": [2], "expect_note": "기울기 소실 정리",
+     "comment": "데모 4단계 질문(2026-10-22 변경). p.2 '기울기 소실(폭발)에 의한 장기 의존성 상실을 해결'과 노트의 RNN 기울기 소실 설명이 텍스트로 직접 이어진다. 이전 질문 'Residual connection은 왜 쓰는 거야?'(p.3)는 노트와 잇는 문장이 근거에 없어 answer-v3에서 노트가 인용되지 않았다"},
+    {"id": "A07", "kind": "answerable", "workspace": "llm", "question": "BERT의 Masked LM에서 고른 토큰은 어떤 비율로 바꿔?",
+     "expected_source": "transformer", "expected_pages": [4]},
+    {"id": "A08", "kind": "answerable", "workspace": "llm", "question": "Top-P 샘플링은 Top-K 샘플링과 뭐가 달라?",
+     "expected_source": "transformer", "expected_pages": [10], "comment": "Top-K 설명은 p.9~10에 걸침. Top-P는 p.10"},
+    {"id": "A09", "kind": "answerable", "workspace": "llm", "question": "선호학습(RLHF)은 어떻게 진행돼?",
+     "expected_source": "transformer", "expected_pages": [8]},
+    {"id": "A10", "kind": "answerable", "workspace": "llm", "question": "샘플링에서 temperature를 낮추면 어떻게 돼?",
+     "expected_source": "transformer", "expected_pages": [9]},
+    {"id": "U01", "kind": "unanswerable", "workspace": "nlp", "question": "Skip-gram의 한계(단점)는 뭐야?",
+     "reason": "figure_only", "comment": "워드 임베딩 p.2 'Skip-Gram vs. CBOW' 표 이미지에만 있음(학습 속도가 느리다). 텍스트 p.1은 학습 방향만 설명"},
+    {"id": "U02", "kind": "unanswerable", "workspace": "nlp", "question": "어텐션 시각화 예시에서 프랑스어 단어 'zone'은 어떤 영어 단어와 정렬돼?",
+     "reason": "figure_only", "comment": "워드 임베딩 p.5 어텐션 히트맵 이미지에만 있음"},
+    {"id": "U03", "kind": "unanswerable", "workspace": "llm", "question": "Transformer 구조도에서 Positional Encoding은 어디에 더해져?",
+     "reason": "figure_only", "comment": "Transformer p.1 구조도 이미지에만 있음. 텍스트에는 Positional Encoding이 없다"},
+    {"id": "U04", "kind": "unanswerable", "workspace": "llm", "question": "LoRA 파인튜닝은 어떤 방식으로 학습 파라미터 수를 줄여?",
+     "reason": "absent_topic", "comment": "자료에 LoRA 없음. fine-tuning 일반 설명은 있어 점수가 높게 나올 수 있는 어려운 보류 사례"},
+    {"id": "U05", "kind": "unanswerable", "workspace": "nlp", "question": "CNN에서 풀링 층은 무슨 역할을 해?",
+     "reason": "absent_topic", "comment": "자료에 CNN·풀링 없음"}
+  ]
+}

@@ -191,9 +191,11 @@ studylink/
 | DELETE /api/workspaces/{id}/notes/{note_id} | 연결 해제(노트는 유지) |
 | POST /api/notes/related | title, body, exclude_note_id(선택) → 서로 다른 노트 최대 3개(note_id, title, snippet. 점수 미노출). 범위는 전체 노트, 저장 전 내용도 검색 |
 | POST /api/workspaces/{id}/quizzes | count=5 → quiz(requested_count, actual_count, 문항. 정답·해설 제외) |
+| GET /api/workspaces/{id}/quizzes | → 최근 퀴즈 20개(requested_count, actual_count, created_at, submitted_at, score) |
 | GET /api/quizzes/{id} | → 제출 전: 문항(정답·해설 제외), 제출 후: 채점 결과·해설·근거 |
 | POST /api/quizzes/{id}/submit | {question_id: option_id} → 채점·해설·근거. 첫 제출로 확정, 재요청은 저장된 결과 반환 |
-| GET /api/reviews | workspace_id → 오답 목록 |
+| GET /api/reviews | workspace_id, status → 오답 목록(관련 노트 제외) |
+| GET /api/reviews/{id} | → 오답 단건 + 관련 노트 최대 3개(조회 시 계산) |
 | PATCH /api/reviews/{id} | learner_reason, status |
 
 질의응답 응답 형식:
@@ -265,6 +267,8 @@ insufficient_evidence 답변으로 초안을 요청하면 422를 돌려준다.
 
 ## 10. 3일 일정
 
+3일차 요구사항·인수 기준: [3일차 PRD](studylink-day3-prd.md). 2일차 미완료(노트 초안·관련 노트·평가)를 이월하고, 퀴즈·오답은 워크스페이스 단위(채팅 무관)로 둔다.
+
 2일차 요구사항·인수 기준: [2일차 PRD](studylink-day2-prd.md). 사용자 결정(2026-10-21)으로 퀴즈 생성 준비·그래프 구현을 3일차로 옮긴다. 2일차는 노트 저장·연결·검색과 초안·검색 품질 보정에 집중한다. 1일차에 완료한 출력 재생성은 유지하고 실제 질의 재작성·재검색을 추가한다.
 
 1일차 요구사항·인수 기준: [1일차 PRD](studylink-day1-prd.md). 기존 일정의 구체화이며 모듈·자동 테스트 범위는 사용자 확인 전 제안이다.
@@ -288,7 +292,7 @@ insufficient_evidence 답변으로 초안을 요청하면 422를 돌려준다.
 1. "자연어처리 기초" 워크스페이스에 워드 임베딩 PDF 업로드 → "Vanishing gradient가 뭐야?" 질문 → p.3 인용 클릭 시 해당 페이지 열림.
 2. 답변에서 "노트로 만들기" → LLM 요약 초안 확인·편집 → "기울기 소실 정리" 노트 저장.
 3. "LLM" 워크스페이스 생성, Transformer PDF 업로드, "기울기 소실 정리" 노트 연결.
-4. "Residual connection은 왜 쓰는 거야?" 질문 → 답변에 Transformer p.3 근거와 함께 "내 노트: 기울기 소실 정리"가 인용됨. **(차별점 1)**
+4. "Transformer는 RNN의 어떤 문제를 해결했어?" 질문 → 답변에 Transformer p.2 근거와 함께 "내 노트: 기울기 소실 정리"가 인용됨. **(차별점 1)** (2026-10-22 변경: 이전 질문 "Residual connection은 왜 쓰는 거야?"는 p.3과 노트를 잇는 문장이 근거 텍스트에 없어 노트가 인용되지 않았다. [3일차 평가](day3-eval.md))
 5. 퀴즈 5문항 풀기 → 오답 선택 → 오답노트에서 근거 페이지와 관련 노트 열기. **(차별점 2)**
 6. Langfuse에서 해당 질문의 trace(검색 근거·프롬프트·토큰)와 노트 초안 trace 보여주기.
 

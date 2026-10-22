@@ -49,7 +49,7 @@ def get_settings() -> Settings:
         gms_base_url=os.getenv('GMS_BASE_URL', 'https://gms.ssafy.io/gmsapi/api.openai.com/v1').rstrip('/'),
         gms_api_key=os.getenv('GMS_KEY', os.getenv('GMS_API_KEY', '')), chat_model=os.getenv('CHAT_MODEL', 'gpt-4.1-mini'),
         max_upload_bytes=int(os.getenv('MAX_UPLOAD_BYTES', str(30 * 1024 * 1024))),
-        min_score=float(os.getenv('MIN_SCORE', '0.2')), relative_margin=float(os.getenv('RELATIVE_MARGIN', '0.1')),
+        min_score=float(os.getenv('MIN_SCORE', '0.2')), relative_margin=float(os.getenv('RELATIVE_MARGIN', '0.15')),
         max_evidence=int(os.getenv('MAX_EVIDENCE', '12')), max_evidence_chars=int(os.getenv('MAX_EVIDENCE_CHARS', '8000')),
         request_timeout=float(os.getenv('REQUEST_TIMEOUT', '30')), http_timeout=float(os.getenv('HTTP_TIMEOUT', '20')),
         mock_scenario=os.getenv('MOCK_SCENARIO', 'normal'),

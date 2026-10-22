@@ -6,6 +6,7 @@ from .db import init_db, recover_interrupted_documents
 from .routers.api import router
 from .routers.chats import router as chats_router
 from .routers.notes import router as notes_router
+from .routers.quizzes import router as quizzes_router
 
 @asynccontextmanager
 async def lifespan(app):
@@ -18,6 +19,7 @@ app = FastAPI(title='StudyLink', lifespan=lifespan)
 app.include_router(router)
 app.include_router(chats_router)
 app.include_router(notes_router)
+app.include_router(quizzes_router)
 
 @app.exception_handler(Exception)
 async def unhandled_exception(request: Request, exc: Exception):

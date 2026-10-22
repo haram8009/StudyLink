@@ -77,6 +77,8 @@ def init_db():
         connection.executescript(SCHEMA)
     with get_connection() as connection:
         _migrate_answers_to_chats(connection)
+    with get_connection() as connection:
+        _migrate_quiz_tables(connection)
 
 def _migrate_answers_to_chats(connection):
     """Day-one databases lack answers.chat_id; move unassigned answers into one legacy chat per workspace."""
@@ -93,6 +95,17 @@ def _migrate_answers_to_chats(connection):
                            (chat_id, row['workspace_id'], LEGACY_CHAT_TITLE, row['first'], row['last']))
         connection.execute('UPDATE answers SET chat_id=? WHERE workspace_id=? AND chat_id IS NULL', (chat_id, row['workspace_id']))
         connection.execute('UPDATE chats SET updated_at=MAX(updated_at,?) WHERE id=?', (row['last'], chat_id))
+
+def _migrate_quiz_tables(connection):
+    """Day-three: questions keep the evidence quote and chunk id; lookup indexes for quizzes/reviews."""
+    columns = {row['name'] for row in connection.execute('PRAGMA table_info(questions)')}
+    if 'quote' not in columns:
+        connection.execute('ALTER TABLE questions ADD COLUMN quote TEXT')
+    if 'chunk_id' not in columns:
+        connection.execute('ALTER TABLE questions ADD COLUMN chunk_id TEXT')
+    connection.execute('CREATE INDEX IF NOT EXISTS questions_quiz ON questions(quiz_id)')
+    connection.execute('CREATE INDEX IF NOT EXISTS quizzes_workspace ON quizzes(workspace_id,created_at)')
+    connection.execute('CREATE INDEX IF NOT EXISTS attempts_question ON attempts(question_id)')
 
 def recover_interrupted_documents():
     with get_connection() as connection:

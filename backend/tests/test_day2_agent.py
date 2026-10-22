@@ -5,7 +5,7 @@ import pytest
 from app.adapters import gms
 from app.config import get_settings
 from app.db import get_connection, init_db
-from app.schemas.answer import GeneratedAnswer, RewrittenQuery
+from app.schemas.answer import GeneratedAnswer, NoteLinks, RewrittenQuery
 from app.services.answer import answer_question
 from app.services.note_index import index_note
 from app.services.retrieval import NoSearchableContent, retrieve
@@ -74,11 +74,13 @@ def fake_llm(monkeypatch, rewrites=None, answer_ids=('e1',), calls=None):
             if isinstance(value, Exception):
                 raise value
             return RewrittenQuery(query=value)
+        if schema is NoteLinks:
+            return NoteLinks(note_explanations=[])
         raise AssertionError('unexpected schema')
     def generate_json(prompt, schema, **kwargs):
         data = json.loads(prompt)
         calls.append(('generate', data, None))
-        return GeneratedAnswer.model_validate({'segments': [{'text': 'answer sentence', 'citation_ids': list(answer_ids)}]})
+        return GeneratedAnswer.model_validate({'answerable': True, 'segments': [{'text': 'answer sentence', 'citation_ids': list(answer_ids)}]})
     monkeypatch.setattr(gms, 'complete_json', complete_json)
     monkeypatch.setattr(gms, 'generate_json', generate_json)
     return calls
@@ -271,3 +273,40 @@ def test_mock_mode_followup_runs_without_stubs():
     with get_connection() as db:
         stored = json.loads(db.execute('SELECT body_json FROM answers').fetchone()[0])
     assert stored['search_query'] == 'residual connection why use it'
+
+def _note_answer(monkeypatch, answerable, segments, note_explanations=(), link_error=None):
+    """generate_json gives the answer; complete_json(NoteLinks) gives the link_notes output and records its calls."""
+    calls = []
+    monkeypatch.setattr(gms, 'generate_json', lambda *args, **kwargs: GeneratedAnswer.model_validate(
+        {'answerable': answerable, 'segments': segments}))
+    def complete_json(prompt, schema, **kwargs):
+        assert schema is NoteLinks
+        calls.append(json.loads(prompt))
+        if link_error:
+            raise link_error
+        return NoteLinks.model_validate({'note_explanations': list(note_explanations)})
+    monkeypatch.setattr(gms, 'complete_json', complete_json)
+    return calls
+
+def test_link_notes_adds_note_sentences_citing_notes_only(monkeypatch):
+    add_doc('d', vector=unit(0)); add_note('n', vector=(unit(0) + unit(1)) / np.sqrt(2), title='기울기 소실 정리')  # doc ranks first: e1 doc, e2 note
+    query_vectors(monkeypatch, {}, default=unit(0))
+    calls = _note_answer(monkeypatch, True, [{'text': 'doc sentence', 'citation_ids': ['e1']}],
+                         [{'text': 'note sentence', 'citation_ids': ['e2']}, {'text': 'mislabelled doc sentence', 'citation_ids': ['e1']}])
+    result = answer_question('w', 'q')
+    assert [s.text for s in result.segments] == ['doc sentence', 'note sentence']
+    assert next(c for c in result.citations if c.source_type == 'note').note_id == 'n'
+    assert calls[0]['answer'] == ['doc sentence'] and [n['id'] for n in calls[0]['notes']] == ['e2']
+
+def test_link_notes_skipped_without_grounded_answer_or_notes(monkeypatch):
+    add_doc('d', vector=unit(0)); add_note('n', vector=unit(0))
+    query_vectors(monkeypatch, {}, default=unit(0))
+    calls = _note_answer(monkeypatch, False, [])
+    assert answer_question('w', 'q').status == 'insufficient_evidence' and calls == []
+
+def test_link_notes_failure_keeps_answer(monkeypatch):
+    add_doc('d', vector=unit(0)); add_note('n', vector=(unit(0) + unit(1)) / np.sqrt(2))
+    query_vectors(monkeypatch, {}, default=unit(0))
+    _note_answer(monkeypatch, True, [{'text': 'doc sentence', 'citation_ids': ['e1']}], link_error=gms.ProviderUnavailable('down'))
+    result = answer_question('w', 'q')
+    assert result.status == 'grounded' and [s.text for s in result.segments] == ['doc sentence']

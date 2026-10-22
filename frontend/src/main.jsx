@@ -22,7 +22,10 @@ import {
 import { api, isMock } from "./api";
 import { ErrorBox, Spinner } from "./ui";
 import { Workspace } from "./Workspace";
+import { QuizPage, ReviewsPage } from "./Study";
 import "./styles.css";
+import "./workspace.css";
+import "./study.css";
 
 function App() {
   return (
@@ -63,6 +66,8 @@ function App() {
                 path="/w/:id"
                 element={<Workspace key={location.pathname} />}
               />
+              <Route path="/w/:id/quiz/:quizId?" element={<QuizPage />} />
+              <Route path="/w/:id/reviews" element={<ReviewsPage />} />
               <Route
                 path="*"
                 element={
