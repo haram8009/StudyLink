@@ -1,5 +1,7 @@
 # 3일차 퀴즈 생성 에이전트 구현 기록
 
+> 후속 변경(2026-10-22): 문항 수·난이도, 정확한 개수 충족과 보충 생성은 [변경 PRD](quiz-customization-prd.md)를 적용했다. 현재 계약·검증·후속 작업은 [변경 통합 기록](quiz-customization-integration.md)을 따른다. 아래 `quiz-v1`·45초·부분 성공 설명과 테스트 결과는 변경 전 기록으로 보존한다.
+
 2026-10-22. 담당 C1. 출제 근거 선택과 퀴즈 그래프(생성·검증·재생성·제외·선택지 섞기). 저장·HTTP는 B 담당이다. 결정 배경은 [3일차 PRD "퀴즈 생성 규칙"](studylink-day3-prd.md), [아키텍처 3.1·4.4·6절](studylink-architecture.md), [ADR 0001](adr/0001-langgraph-without-langchain.md).
 
 ## 파일

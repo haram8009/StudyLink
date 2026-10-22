@@ -98,6 +98,9 @@ def _migrate_answers_to_chats(connection):
 
 def _migrate_quiz_tables(connection):
     """Day-three: questions keep the evidence quote and chunk id; lookup indexes for quizzes/reviews."""
+    quiz_columns = {row['name'] for row in connection.execute('PRAGMA table_info(quizzes)')}
+    if 'difficulty' not in quiz_columns:
+        connection.execute("ALTER TABLE quizzes ADD COLUMN difficulty TEXT CHECK(difficulty IN ('easy','medium','hard'))")
     columns = {row['name'] for row in connection.execute('PRAGMA table_info(questions)')}
     if 'quote' not in columns:
         connection.execute('ALTER TABLE questions ADD COLUMN quote TEXT')

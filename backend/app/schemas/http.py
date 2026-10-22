@@ -54,7 +54,8 @@ class NoteUpdate(BaseModel):
     workspace_ids: list[str] | None = None
 
 class QuizCreate(BaseModel):
-    count: int = Field(default=5, ge=1, le=5)
+    count: int = Field(default=5, ge=1, le=10, strict=True)
+    difficulty: Literal['easy', 'medium', 'hard'] = 'medium'
 
 class QuizSubmit(BaseModel):
     """answers: {question_id: option_id}; completeness is checked against the stored quiz."""

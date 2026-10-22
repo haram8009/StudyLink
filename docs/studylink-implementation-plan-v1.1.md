@@ -1,8 +1,11 @@
 # 연결형 학습 노트 서비스 구현기획서 v1.1
 
+후속 요구사항(2026-10-22): [워크스페이스 개요·채팅 분리와 PDF 추가 업로드 PRD](2026-10-22-01-workspace-overview-pdf-upload-prd.md). 초안이며 구현·실행 검증 전이다. 개요와 채팅의 경로 분리를 구체화하고 기존 PDF 업로드를 개요에서 제공하는 계획이다. 자료 공유·채팅 문맥 격리와 기존 API 계약은 유지한다.
+
 작성일: 2026-10-21 (Asia/Seoul)  
 상태: 3일·3명 시제품 실행 계획. 1일차 핵심 흐름을 구현·통합 확인했으며 전체 시제품은 진행 중이다.  
 구현 진행: [1일차 구현·통합 검증 결과](day1-integration.md). 아래 표는 원래 계획이며 현재 확인 결과는 통합 기록을 따른다.  
+화면 개선: [2026-10-22 UI 개선·검증 기록](ui-polish-2026-10-22.md). 기능 범위·API 계약 변경 없음.
 이전 버전: [studylink-implementation-plan.md](studylink-implementation-plan.md) (v1.0, 장기 설계 참고용으로 보존)  
 아키텍처: [studylink-architecture.md](studylink-architecture.md)  
 문서 점검: [2026-10-21 점검 결과·후속 작업](studylink-design-review-2026-10-21.md) — 항목별 반영 상태는 보고서 상단을 따른다.  
@@ -84,7 +87,7 @@ PDF 업로드 → 근거 답변(페이지 인용) → 답변을 노트로 저장
 | 벡터 검색 | 임베딩을 SQLite에 저장, numpy 코사인 전수 검색 | 수천 청크 규모면 충분하고 워크스페이스 필터가 쉬움 |
 | PDF 추출 | PyMuPDF | 페이지별 텍스트 추출이 빠르고 단순 |
 | 에이전트 구성 | LangGraph `StateGraph` | 상태·도구 실행·조건 분기·제한된 재시도를 명시적으로 구성 |
-| LLM | GMS HTTP 어댑터(httpx), `CHAT_MODEL`=gpt-4.1-mini | JSON schema(strict) 구조화 출력 + Pydantic 검증. 긴 근거(약 7,200자)에서 생성 1회 약 1.4초(2026-10-21 실측). HTTP 타임아웃 20초, 요청 한도 질의응답 30초·초안 20초·퀴즈 45초 |
+| LLM | GMS HTTP 어댑터(httpx), `CHAT_MODEL`=gpt-4.1-mini | JSON schema(strict) 구조화 출력 + Pydantic 검증. 긴 근거(약 7,200자)에서 생성 1회 약 1.4초(2026-10-21 실측). HTTP 타임아웃 20초, 요청 한도 질의응답 30초·초안 20초·퀴즈 120초(2026-10-22 변경) |
 | 임베딩 | GMS HTTP 어댑터, text-embedding-3-small | 1536차원, 배치 호출 동작(2026-10-21 확인) |
 | 관측 배치 | Langfuse 클라우드 | 설치 없이 바로 사용 |
 | 관측 | Langfuse Python SDK 직접 계측 | 그래프 실행·노드·모델 호출별 프롬프트·응답·토큰·지연 기록 |
@@ -151,7 +154,7 @@ studylink/
 | note_citations | note_id, citation_id(노트 안 고유, c1…), source_type(doc/note), document_id·page·quote(doc), cited_note_id(note) |
 | chats | id, workspace_id, title, created_at, updated_at |
 | answers | id, workspace_id, chat_id, question, body_json, created_at |
-| quizzes | id, workspace_id, requested_count, actual_count, created_at, submitted_at |
+| quizzes | id, workspace_id, requested_count, actual_count, difficulty(이전 데이터 NULL), created_at, submitted_at |
 | questions | id, quiz_id, stem, options_json, answer_option_id, explanation, document_id, page |
 | attempts | id, question_id, selected_option_id, correct, submitted_at |
 | reviews | id, question_id(UNIQUE), status(open/reviewed), learner_reason |
@@ -191,8 +194,8 @@ studylink/
 | POST /api/workspaces/{id}/notes/{note_id} | 노트 연결 |
 | DELETE /api/workspaces/{id}/notes/{note_id} | 연결 해제(노트는 유지) |
 | POST /api/notes/related | title, body, exclude_note_id(선택) → 서로 다른 노트 최대 3개(note_id, title, snippet. 점수 미노출). 범위는 전체 노트, 저장 전 내용도 검색 |
-| POST /api/workspaces/{id}/quizzes | count=5 → quiz(requested_count, actual_count, 문항. 정답·해설 제외) |
-| GET /api/workspaces/{id}/quizzes | → 최근 퀴즈 20개(requested_count, actual_count, created_at, submitted_at, score) |
+| POST /api/workspaces/{id}/quizzes | count=5(엄격한 정수 1~10), difficulty=medium(easy/medium/hard) → quiz(requested_count=actual_count, difficulty, 문항. 정답·해설·quote 제외) |
+| GET /api/workspaces/{id}/quizzes | → 최근 퀴즈 20개(requested_count, actual_count, difficulty, created_at, submitted_at, score). 이전 난이도는 null |
 | GET /api/quizzes/{id} | → 제출 전: 문항(정답·해설 제외), 제출 후: 채점 결과·해설·근거 |
 | POST /api/quizzes/{id}/submit | {question_id: option_id} → 채점·해설·근거. 첫 제출로 확정, 재요청은 저장된 결과 반환 |
 | GET /api/reviews | workspace_id, status → 오답 목록(관련 노트 제외) |
@@ -249,6 +252,10 @@ insufficient_evidence 답변으로 초안을 요청하면 422를 돌려준다.
 - 노트 초안은 저장된 답변을 LLM으로 요약한 Markdown이다. 원 답변에 없는 사실을 더하지 않고, 인용은 원 답변의 ID만 쓴다. 원 답변에 없는 ID는 서버가 제거한다. LLM이 실패하면 segments를 문단으로 이은 초안을 `fallback: true`로 돌려준다. 사용자가 저장하기 전에는 검색 대상이 아니다.
 
 ## 8. 퀴즈 규칙
+
+변경(2026-10-22): [퀴즈 설정·요청 개수 충족·해설 참고 자료 PRD](quiz-customization-prd.md)를 적용했다. 문항 수는 엄격한 정수 1~10(기본 5), 난이도는 쉬움·보통·어려움(기본 보통)이다. 부모 그래프는 통과 문항을 보존하고 부족분만 보충한다(최대 5라운드·슬롯당 2회·120초·동시 5개). 요청 수를 정확히 채운 경우에만 원자적으로 저장한다. 소진 422·시간 초과 및 전체 공급자 장애 503에서는 부분 퀴즈를 남기지 않는다. 기존 기록의 난이도는 미지정으로 유지하며 과거 부분 퀴즈도 조회·채점할 수 있다. 해설·오답 상세에는 참고 자료명·페이지·인용문·원문 이동을 함께 표시한다. 검증 결과와 미확인 사항은 [변경 통합 기록](quiz-customization-integration.md)에 둔다.
+
+아래 항목은 변경 전 구현 기준이다. 5문항 고정·부분 생성 성공 정책은 위 계약으로 대체하며 기존 기록은 보존한다.
 
 - 출제 범위: 현재 워크스페이스의 문서 청크에서 무작위로 고른 5개 근거.
 - 생성: 근거마다 문제·선택지 4개·정답 option_id·해설을 JSON으로 생성.

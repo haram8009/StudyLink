@@ -101,7 +101,6 @@ function Home() {
   useEffect(load, []);
   return (
     <div className="home">
-      <div className="eyebrow">YOUR LEARNING, CONNECTED</div>
       <div className="page-heading">
         <div>
           <h1>나의 워크스페이스</h1>
@@ -113,14 +112,8 @@ function Home() {
       </div>
       <section className="intro">
         <div>
-          <span className="intro-label">
-            <Sparkles size={15} />
-            생각을 잇는 공부
-          </span>
           <h2>
-            읽고, 질문하고,
-            <br />
-            근거로 이해하세요.
+            읽고, 질문하고, 근거로 이해하세요.
           </h2>
           <p>
             PDF 속 궁금한 내용을 질문하면
@@ -128,21 +121,12 @@ function Home() {
             답변과 함께 원문의 페이지를 짚어드려요.
           </p>
         </div>
-        <div className="intro-art" aria-hidden="true">
-          <div className="art-paper">
-            <FileText size={28} />
-            <span />
-            <span />
-            <span />
-            <b>PDF 자료</b>
-          </div>
-          <div className="art-connector">······</div>
-          <div className="art-answer">
-            <Sparkles size={20} />
-            <b>이해의 시작</b>
-            <span>답변에 연결된 근거</span>
-            <em>자료 · 3페이지 ↗</em>
-          </div>
+        <div className="learning-flow" aria-label="자료에서 근거를 확인하는 학습 흐름">
+          <span><FileText size={19} />PDF 자료</span>
+          <ArrowRight size={16} aria-hidden="true" />
+          <span><Sparkles size={19} />질문과 답변</span>
+          <ArrowRight size={16} aria-hidden="true" />
+          <span><BookOpen size={19} />원문 근거</span>
         </div>
       </section>
       <div className="section-heading">

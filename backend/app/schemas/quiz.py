@@ -31,6 +31,7 @@ class QuizPublic(BaseModel):
     workspace_id: str
     requested_count: int
     actual_count: int
+    difficulty: Literal['easy', 'medium', 'hard'] | None = None
     created_at: str
     submitted_at: None = None
     questions: list[QuestionPublic]
@@ -40,6 +41,7 @@ class QuizGraded(BaseModel):
     workspace_id: str
     requested_count: int
     actual_count: int
+    difficulty: Literal['easy', 'medium', 'hard'] | None = None
     created_at: str
     submitted_at: str
     score: int
@@ -50,6 +52,7 @@ class QuizSummary(BaseModel):
     quiz_id: str
     requested_count: int
     actual_count: int
+    difficulty: Literal['easy', 'medium', 'hard'] | None = None
     created_at: str
     submitted_at: str | None = None
     score: int | None = None

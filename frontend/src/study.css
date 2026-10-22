@@ -12,8 +12,8 @@
   align-items: center;
   gap: 6px;
   padding: 10px 14px;
-  font-size: 12px;
-  color: #7f9585;
+  font-size: 14px;
+  color: var(--muted);
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
   white-space: nowrap;
@@ -58,6 +58,39 @@
   padding: 10px 12px;
   margin-bottom: 8px;
 }
+.quiz-settings {
+  border: 0;
+  padding: 0;
+  margin: 0 0 16px;
+  min-width: 0;
+}
+.quiz-settings legend { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
+.quiz-settings label { display: block; margin: 10px 0; font-size: 13px; }
+.quiz-settings select {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink, #243c35);
+  font: inherit;
+}
+.quiz-settings p { font-size: 13px; line-height: 1.7; color: var(--muted); }
+.quiz-setting-summary { margin: 12px 0; font-size: 14px; font-weight: 600; color: var(--green); }
+.quiz-settings:disabled { opacity: 0.7; }
+.mock-tools { width: 100%; margin-bottom: 12px; }
+.reference-material { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--border); min-width: 0; }
+.reference-material > strong { display: block; margin-bottom: 8px; }
+.reference-material .evidence-chip { white-space: normal; text-align: left; overflow-wrap: anywhere; line-height: 1.7; }
+.reference-material .viewer-quote { margin: 12px 0; max-height: none; }
+.reference-material .text-button:disabled { color: var(--muted); cursor: not-allowed; }
+@media (max-width: 850px) {
+  .quiz-list .chat-list-body { max-height: none; display: block; }
+  .quiz-settings select { font-size: 16px; }
+}
 .quiz-item,
 .review-item {
   display: block;
@@ -71,9 +104,9 @@
 }
 .mock-scenario {
   margin: 0 0 8px;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 500;
-  color: #8a9a8c;
+  color: var(--muted);
 }
 .mock-scenario select {
   display: block;
@@ -84,14 +117,14 @@
   border-radius: 6px;
   background: #fcfdfb;
   font: inherit;
-  font-size: 11px;
+  font-size: 13px;
   color: #476754;
 }
 .generating {
   display: flex;
   gap: 8px;
   align-items: start;
-  font-size: 11px;
+  font-size: 13px;
   color: #476754;
   background: #f4f8f2;
   border: 1px solid #e0eadf;
@@ -101,8 +134,8 @@
 }
 .generating small {
   display: block;
-  font-size: 9px;
-  color: #8fa192;
+  font-size: 12px;
+  color: var(--muted);
 }
 .quiz-main {
   min-height: 560px;
@@ -118,9 +151,9 @@
   margin: 20px;
 }
 .quiz-head h2 small {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 400;
-  color: #a1afa3;
+  color: var(--muted);
 }
 .quiz-body {
   padding: 18px 20px 24px;
@@ -142,8 +175,8 @@
   gap: 12px;
 }
 .score-card span {
-  font-size: 11px;
-  color: #8a988d;
+  font-size: 13px;
+  color: var(--muted);
 }
 .score-card strong {
   font-size: 28px;
@@ -151,10 +184,10 @@
 }
 .score-card strong small {
   font-size: 14px;
-  color: #8fa192;
+  color: var(--muted);
 }
 .score-card p {
-  font-size: 12px;
+  font-size: 14px;
   color: #5b6f60;
   line-height: 1.8;
   margin-top: 6px;
@@ -164,8 +197,8 @@
 }
 .submitted-at {
   display: block;
-  font-size: 9px;
-  color: #a5b0a5;
+  font-size: 12px;
+  color: var(--muted);
   margin-top: 6px;
 }
 .question-list {
@@ -202,7 +235,7 @@
   border-radius: 7px;
   background: #edf3e5;
   color: #5f7a55;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
 }
 .stem {
@@ -217,7 +250,7 @@
   align-items: center;
   gap: 5px;
   margin-top: 8px;
-  font-size: 10px;
+  font-size: 12px;
   color: #6f7d58;
   background: #f3f3ed;
   border: 1px solid #e8e8dc;
@@ -242,7 +275,7 @@ button.evidence-chip:hover,
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 700;
   border-radius: 20px;
   padding: 3px 9px;
@@ -276,7 +309,7 @@ button.evidence-chip:hover,
   background: #fcfdfb;
   border-radius: 8px;
   padding: 10px 12px;
-  font-size: 12px;
+  font-size: 14px;
   color: #3d5446;
   line-height: 1.6;
 }
@@ -296,9 +329,9 @@ button.option:hover:not(:disabled) {
   place-items: center;
   border-radius: 50%;
   border: 1px solid #d5ded6;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
-  color: #7f9585;
+  color: var(--muted);
   background: #fff;
 }
 .option-text {
@@ -335,7 +368,7 @@ button.option:hover:not(:disabled) {
 }
 .option-tag {
   flex-shrink: 0;
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 700;
   color: #5e7564;
   background: #fff;
@@ -349,11 +382,11 @@ button.option:hover:not(:disabled) {
   border-top: 1px dashed #e6ece0;
 }
 .explanation strong {
-  font-size: 11px;
+  font-size: 13px;
   color: #5f7a55;
 }
 .explanation p {
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.8;
   color: #4d6352;
   margin: 4px 0 10px;
@@ -391,7 +424,7 @@ button.option:hover:not(:disabled) {
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  font-size: 12px;
+  font-size: 14px;
   color: #476754;
 }
 .confirm-row span {
@@ -407,7 +440,7 @@ button.option:hover:not(:disabled) {
 .review-filter button {
   flex: 1;
   padding: 8px;
-  font-size: 11px;
+  font-size: 13px;
   border-radius: 7px;
   border: 1px solid #dce5de;
   background: #fff;
@@ -420,7 +453,7 @@ button.option:hover:not(:disabled) {
   font-weight: 700;
 }
 .review-status {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
   color: #b2533b;
   background: #fff0ea;
@@ -438,32 +471,32 @@ button.option:hover:not(:disabled) {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   color: #476754;
   margin-bottom: 8px;
 }
 .review-section h3 span {
-  font-size: 10px;
-  color: #a1afa3;
+  font-size: 12px;
+  color: var(--muted);
 }
 .review-section .citation-card em.linked {
   color: #4f7f8e;
 }
 .review-section .citation-card em.unlinked {
-  color: #a3a08c;
+  color: var(--muted);
 }
 .related-empty {
   border: 1px dashed #d9e3da;
   border-radius: 8px;
   padding: 14px;
-  font-size: 11px;
-  color: #7f9585;
+  font-size: 13px;
+  color: var(--muted);
   line-height: 1.7;
 }
 .related-empty strong {
   color: #476754;
-  font-size: 12px;
+  font-size: 14px;
 }
 .memo-actions {
   display: flex;
@@ -474,12 +507,12 @@ button.option:hover:not(:disabled) {
 }
 .memo-actions small,
 .status-saved {
-  font-size: 10px;
-  color: #8fa192;
+  font-size: 12px;
+  color: var(--muted);
 }
 .memo-actions .secondary {
   padding: 9px 13px;
-  font-size: 11px;
+  font-size: 13px;
 }
 
 /* 채팅 답변의 "노트로 만들기" */
@@ -491,8 +524,8 @@ button.option:hover:not(:disabled) {
   margin-top: 14px;
 }
 .answer-actions small {
-  font-size: 10px;
-  color: #a1afa3;
+  font-size: 12px;
+  color: var(--muted);
 }
 .answer-actions .error {
   width: 100%;
@@ -500,7 +533,7 @@ button.option:hover:not(:disabled) {
 }
 .secondary.small {
   padding: 7px 11px;
-  font-size: 11px;
+  font-size: 13px;
 }
 
 /* 노트 초안 · 관련 노트 */
@@ -515,11 +548,11 @@ button.option:hover:not(:disabled) {
   gap: 6px;
   margin-bottom: 8px;
   color: var(--green);
-  font-size: 12px;
+  font-size: 14px;
 }
 .draft-head small {
-  font-size: 9px;
-  color: #98a69a;
+  font-size: 12px;
+  color: var(--muted);
 }
 .draft-citations {
   display: flex;
@@ -529,7 +562,7 @@ button.option:hover:not(:disabled) {
 }
 .draft-citations span,
 .draft-citations button {
-  font-size: 9px;
+  font-size: 12px;
   background: #edf3e5;
   color: #6c8460;
   border-radius: 4px;
@@ -538,7 +571,7 @@ button.option:hover:not(:disabled) {
 .draft-citations button {
   border: 1px solid #dbe7d0;
   cursor: pointer;
-  font-size: 10px;
+  font-size: 12px;
   padding: 3px 7px;
 }
 .draft-citations button:hover:not(:disabled) {
@@ -551,8 +584,8 @@ button.option:hover:not(:disabled) {
 }
 .draft-citations small {
   width: 100%;
-  font-size: 9px;
-  color: #a1afa3;
+  font-size: 12px;
+  color: var(--muted);
 }
 .related-box .text-button {
   margin: 0;
@@ -581,14 +614,14 @@ button.option:hover:not(:disabled) {
 }
 .related-row strong {
   display: block;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   color: #243c35;
   overflow-wrap: anywhere;
 }
 .related-row p {
-  font-size: 10px;
-  color: #8a9a8c;
+  font-size: 12px;
+  color: var(--muted);
   line-height: 1.6;
   margin-top: 2px;
   overflow: hidden;
@@ -621,7 +654,7 @@ button.option:hover:not(:disabled) {
     gap: 14px;
   }
   .quiz-list .chat-list-body {
-    max-height: 240px;
+    max-height: none;
   }
   .options,
   .explanation {

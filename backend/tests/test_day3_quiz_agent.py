@@ -10,7 +10,7 @@ from app.config import get_settings
 from app.db import get_connection, init_db
 from app.schemas.quiz_generation import GeneratedQuestion
 from app.services import quiz_generation
-from app.services.quiz_generation import NoQuizEvidence, NoValidQuestions, generate_quiz_questions, select_quiz_evidence
+from app.services.quiz_generation import NoQuizEvidence, NoValidQuestions, QuizDeadlineExceeded, generate_quiz_questions, select_quiz_evidence
 
 DIM = 8
 
@@ -76,7 +76,7 @@ def fake_llm(monkeypatch, plan=None, calls=None, delay=0.0, gate=None):
     calls = calls if calls is not None else []
     lock = threading.Lock()
     def complete_json(prompt, schema, **kwargs):
-        assert schema is GeneratedQuestion and kwargs['schema_name'] == 'quiz_question' and kwargs['prompt_version'] == 'quiz-v1'
+        assert schema is GeneratedQuestion and kwargs['schema_name'] == 'quiz_question' and kwargs['prompt_version'] == 'quiz-v2'
         chunk_id = chunk_of(prompt)
         with lock:
             calls.append((chunk_id, json.loads(prompt)))
@@ -167,8 +167,9 @@ def test_prompt_contains_only_evidence_text_and_no_ids(monkeypatch):
     calls = fake_llm(monkeypatch)
     generate_quiz_questions('w', 1, rng=random.Random(0))
     payload = calls[0][1]
-    assert set(payload) == {'evidence'} and set(payload['evidence']) == {'title', 'text'}
-    assert 'quiz-v1' == quiz_agent.PROMPT_VERSION
+    assert payload['difficulty'] == 'medium' and set(payload['evidence']) == {'title', 'text'}
+    assert payload['avoid_questions'] == [] and payload['difficulty_instruction']
+    assert 'quiz-v2' == quiz_agent.PROMPT_VERSION
     assert '근거' in quiz_agent.SYSTEM_PROMPT and '지시' in quiz_agent.SYSTEM_PROMPT and '한국어' in quiz_agent.SYSTEM_PROMPT
 
 
@@ -202,22 +203,23 @@ def test_invalid_question_is_regenerated_once_and_succeeds(monkeypatch, bad):
     assert len(calls) == 6
 
 
-def test_regeneration_exhausted_excludes_question(monkeypatch):
+def test_regeneration_exhausted_is_replenished(monkeypatch):
     five_chunks()
     bad = valid_output('c2', answer_option_id='x')
     calls = fake_llm(monkeypatch, plan={'c2': [bad, bad, bad]})
     result = generate_quiz_questions('w', 5, rng=random.Random(0))
-    assert result['requested_count'] == 5 and len(result['questions']) == 4
-    assert 'c2' not in {question['chunk_id'] for question in result['questions']}
-    assert len([chunk for chunk, _ in calls if chunk == 'c2']) == 2  # one regeneration only
+    assert result['requested_count'] == 5 and len(result['questions']) == 5
+    assert {'c1', 'c3', 'c4', 'c5'} <= {question['chunk_id'] for question in result['questions']}
+    assert len([chunk for chunk, _ in calls if chunk == 'c2']) >= 3
 
 
 def test_zero_valid_questions_raises(monkeypatch):
     five_chunks()
-    fake_llm(monkeypatch, plan={c: [gms.ModelOutputError('x')] * 2 for c in ('c1', 'c2', 'c3', 'c4', 'c5')})
+    calls = fake_llm(monkeypatch, plan={c: [gms.ModelOutputError('x')] * 10 for c in ('c1', 'c2', 'c3', 'c4', 'c5')})
     with pytest.raises(NoValidQuestions):
         generate_quiz_questions('w', 5)
     assert quiz_rows() == 0
+    assert len(calls) == 50
 
 
 def test_all_branches_provider_failure_raises_provider_unavailable(monkeypatch):
@@ -232,13 +234,14 @@ def test_partial_provider_failure_excludes_only_that_branch(monkeypatch):
     five_chunks()
     fake_llm(monkeypatch, plan={'c3': [gms.ProviderUnavailable('down')], 'c4': [gms.ProviderUnavailable('down')]})
     result = generate_quiz_questions('w', 5)
-    assert sorted(question['chunk_id'] for question in result['questions']) == ['c1', 'c2', 'c5']
+    assert len(result['questions']) == 5
+    assert {'c1', 'c2', 'c5'} <= {question['chunk_id'] for question in result['questions']}
 
 
 def test_provider_and_invalid_mix_with_no_valid_is_not_503(monkeypatch):
     five_chunks()
-    plan = {c: [gms.ProviderUnavailable('down')] for c in ('c1', 'c2', 'c3', 'c4')}
-    plan['c5'] = [gms.ModelOutputError('x')] * 2
+    plan = {c: [gms.ProviderUnavailable('down')] * 5 for c in ('c1', 'c2', 'c3', 'c4')}
+    plan['c5'] = [gms.ModelOutputError('x')] * 10
     fake_llm(monkeypatch, plan=plan)
     with pytest.raises(NoValidQuestions):
         generate_quiz_questions('w', 5)
@@ -270,15 +273,15 @@ def test_deadline_excludes_slow_branch_and_keeps_finished(monkeypatch):
         time.sleep(0.7)
         return gms.ProviderUnavailable('질문 처리 시간 한도를 초과했습니다.')  # what the adapter's check_deadline raises
     fake_llm(monkeypatch, plan={'c5': [slow]})
-    result = generate_quiz_questions('w', 5)
-    assert sorted(question['chunk_id'] for question in result['questions']) == ['c1', 'c2', 'c3', 'c4']
+    with pytest.raises(QuizDeadlineExceeded):
+        generate_quiz_questions('w', 5)
 
 
 def test_deadline_too_short_starts_no_branch(monkeypatch):
     five_chunks()
     monkeypatch.setattr(quiz_generation, 'QUIZ_TIMEOUT', 1.0)  # below MIN_BRANCH_SECONDS
     calls = fake_llm(monkeypatch)
-    with pytest.raises(NoValidQuestions):
+    with pytest.raises(QuizDeadlineExceeded):
         generate_quiz_questions('w', 5)
     assert calls == []
 
@@ -294,6 +297,13 @@ def test_mock_mode_normal_builds_deterministic_questions():
         assert answer in question['quote']
 
 
+def test_mock_single_evidence_exhausts_instead_of_numbering_copies():
+    add_doc('d', [('only', 1)])
+    with pytest.raises(NoValidQuestions):
+        generate_quiz_questions('w', 2)
+    assert quiz_rows() == 0
+
+
 @pytest.mark.parametrize('scenario, error', [('invalid_json', NoValidQuestions), ('provider_error', gms.ProviderUnavailable)])
 def test_mock_mode_failure_scenarios(monkeypatch, scenario, error):
     five_chunks()
@@ -301,3 +311,123 @@ def test_mock_mode_failure_scenarios(monkeypatch, scenario, error):
     get_settings.cache_clear()
     with pytest.raises(error):
         generate_quiz_questions('w', 5)
+
+
+@pytest.mark.parametrize('difficulty', ['easy', 'medium', 'hard'])
+@pytest.mark.parametrize('count', [1, 10])
+def test_settings_and_exact_count_with_one_reusable_evidence(monkeypatch, difficulty, count):
+    add_doc('d', [('only', 1)])
+    calls = []
+    def complete(prompt, schema, **kwargs):
+        payload = json.loads(prompt)
+        calls.append(payload)
+        return schema.model_validate(valid_output(payload['learning_point_slot']))
+    monkeypatch.setattr(gms, 'complete_json', complete)
+    result = generate_quiz_questions('w', count, difficulty=difficulty)
+    assert len(result['questions']) == count == result['requested_count']
+    assert result['difficulty'] == difficulty
+    assert all(p['difficulty'] == difficulty and p['difficulty_instruction'] == quiz_agent.DIFFICULTY_INSTRUCTIONS[difficulty] for p in calls)
+    assert all(q['document_id'] == 'd' and q['page'] == 1 and q['quote'] for q in result['questions'])
+
+
+def test_initial_all_invalid_can_recover_with_same_difficulty(monkeypatch):
+    five_chunks()
+    calls = fake_llm(monkeypatch, plan={c: [gms.ModelOutputError('bad')] * 2 for c in ('c1','c2','c3','c4','c5')})
+    result = generate_quiz_questions('w', 5, difficulty='hard')
+    assert len(result['questions']) == 5 and len(calls) == 15
+    assert all(payload['difficulty'] == 'hard' for _, payload in calls)
+
+
+def test_dedup_normalizes_case_whitespace_and_option_order_and_preserves_valid(monkeypatch):
+    five_chunks()
+    calls = []
+    def complete(prompt, schema, **kwargs):
+        payload = json.loads(prompt)
+        calls.append(payload)
+        if payload['learning_point_slot'].startswith('r1:'):
+            draft = valid_output('same', stem='  SAME    Question ')
+            if payload['learning_point_slot'].endswith('1'):
+                draft['stem'] = 'same question'
+                draft['options'].reverse()
+                for o in draft['options']:
+                    o['text'] = ' ' + o['text'].upper() + ' '
+            return schema.model_validate(draft)
+        assert len(payload['avoid_questions']) == 1
+        assert all('stem' in q and 'options' in q for q in payload['avoid_questions'])
+        return schema.model_validate(valid_output(payload['learning_point_slot']))
+    monkeypatch.setattr(gms, 'complete_json', complete)
+    result = generate_quiz_questions('w', 5)
+    assert len(result['questions']) == 5 and len(calls) == 9
+    assert sum(quiz_agent._norm(q['stem']) == 'same question' for q in result['questions']) == 1
+    assert len({quiz_agent.question_fingerprint(q['stem'],q['options']) for q in result['questions']}) == 5
+
+
+def test_partial_valid_then_duplicates_exhaust_budget_without_storage(monkeypatch):
+    five_chunks()
+    calls = []
+    def complete(prompt, schema, **kwargs):
+        calls.append(json.loads(prompt))
+        return schema.model_validate(valid_output('same'))
+    monkeypatch.setattr(gms, 'complete_json', complete)
+    with pytest.raises(NoValidQuestions):
+        generate_quiz_questions('w', 5)
+    assert len(calls) == 21  # 5 initially, then only the 4 missing slots in each round
+    assert quiz_rows() == 0
+
+
+def test_clock_deadline_wins_over_mixed_failures_without_sleep(monkeypatch):
+    five_chunks()
+    clock = [100.0]
+    monkeypatch.setattr(quiz_generation.time, 'monotonic', lambda: clock[0])
+    def complete(prompt, schema, **kwargs):
+        clock[0] = 221.0
+        raise gms.ProviderUnavailable('down')
+    monkeypatch.setattr(gms, 'complete_json', complete)
+    with pytest.raises(QuizDeadlineExceeded):
+        generate_quiz_questions('w', 5)
+    assert quiz_rows() == 0
+
+
+def test_invalid_page_and_chunk_scope_not_candidates():
+    add_doc('d', [('zero', 0), ('outside', 11)])
+    with pytest.raises(NoQuizEvidence):
+        generate_quiz_questions('w', 1)
+
+
+def test_stale_evidence_is_rejected(monkeypatch):
+    five_chunks()
+    fake_llm(monkeypatch)
+    monkeypatch.setattr(quiz_agent, 'evidence_is_current', lambda *args: False)
+    with pytest.raises(NoValidQuestions):
+        generate_quiz_questions('w', 5)
+
+
+def test_prompt_avoids_shuffled_answer_labels_and_requires_application():
+    assert '선택지를 섞으므로' in quiz_agent.SYSTEM_PROMPT
+    assert 'a/b/c/d' in quiz_agent.SYSTEM_PROMPT and '지칭하지 않는다' in quiz_agent.SYSTEM_PROMPT
+    assert '내부 용어' in quiz_agent.SYSTEM_PROMPT
+    assert '상황을 반드시 제시' in quiz_agent.DIFFICULTY_INSTRUCTIONS['hard']
+
+
+def test_failed_trace_keeps_diagnostic_counts_without_returning_partial_questions(monkeypatch):
+    from contextlib import contextmanager
+    five_chunks()
+    class Span:
+        def __init__(self):
+            self.updates = []
+        def update(self, **kwargs):
+            self.updates.append(kwargs)
+    span = Span()
+    @contextmanager
+    def observe(*args, **kwargs):
+        assert kwargs['metadata']['difficulty'] == 'hard'
+        assert kwargs['metadata']['requested_count'] == 5
+        yield span
+    monkeypatch.setattr(quiz_generation, 'observe', observe)
+    monkeypatch.setattr(gms, 'complete_json', lambda prompt, schema, **kwargs: schema.model_validate(valid_output('same')))
+    with pytest.raises(NoValidQuestions):
+        generate_quiz_questions('w', 5, difficulty='hard')
+    metadata = span.updates[-1]['metadata']
+    assert metadata['accepted'] == 1 and metadata['missing'] == 4
+    assert metadata['round'] == 5 and metadata['calls'] == 21
+    assert metadata['termination_reason'] == 'NoValidQuestions' and metadata['latency_seconds'] >= 0

@@ -1,4 +1,4 @@
-"""Model output schema for one quiz question (prompt `quiz-v1`).
+"""Model output schema for one quiz question (prompt `quiz-v2`).
 
 Only shape is declared here: option count, blanks, duplicates and the answer reference are checked in code
 (agents/quiz.py validate) so a bad question is regenerated once instead of failing schema parsing in strict mode.

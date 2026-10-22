@@ -9,31 +9,37 @@ router = APIRouter(prefix='/api')
 
 PROVIDER_DOWN = '모델 서비스에 연결할 수 없습니다. 잠시 후 재시도하세요'
 
-def _generate(workspace_id: str, count: int) -> dict:
+def _generate(workspace_id: str, count: int, difficulty: str) -> dict:
     from ..adapters.gms import ProviderUnavailable
-    from ..services.quiz_generation import NoQuizEvidence, NoValidQuestions, generate_quiz_questions
+    from ..services.quiz_generation import NoQuizEvidence, NoValidQuestions, QuizDeadlineExceeded, generate_quiz_questions
     try:
-        return generate_quiz_questions(workspace_id, count)
+        return generate_quiz_questions(workspace_id, count, difficulty=difficulty)
     except NoQuizEvidence as exc:
         raise HTTPException(400, str(exc) or '출제할 처리 완료 자료가 없습니다. 자료를 먼저 올리세요') from exc
     except NoValidQuestions as exc:
         raise HTTPException(422, str(exc) or '유효한 문항을 만들지 못했습니다. 다시 시도하세요') from exc
     except ProviderUnavailable as exc:
         raise HTTPException(503, PROVIDER_DOWN) from exc
+    except QuizDeadlineExceeded as exc:
+        raise HTTPException(503, '퀴즈 생성 시간이 초과됐어요. 잠시 후 다시 시도해 주세요.') from exc
 
 @router.post('/workspaces/{workspace_id}/quizzes', status_code=201, response_model=QuizPublic)
 def create_quiz(workspace_id: str, body: QuizCreate | None = None):
+    from ..services.quiz_generation import NoValidQuestions
     count = body.count if body else 5
+    difficulty = body.difficulty if body else 'medium'
     require_workspace(workspace_id)
     try:
         with quizzes.generation_turn(workspace_id):
-            result = _generate(workspace_id, count)
+            result = _generate(workspace_id, count, difficulty)
             questions = list(result.get('questions') or [])
-            if not questions:
-                raise HTTPException(422, '유효한 문항을 만들지 못했습니다. 다시 시도하세요')
-            quiz_id = quizzes.save_quiz(workspace_id, int(result.get('requested_count') or count), questions)
+            if len(questions) != count or result.get('requested_count') != count:
+                raise HTTPException(422, f'요청한 {count}문항을 모두 만들지 못했어요. 다시 시도하거나 자료를 추가해 주세요.')
+            quiz_id = quizzes.save_quiz(workspace_id, count, questions, difficulty)
     except quizzes.QuizBusy as exc:
         raise HTTPException(409, '이 워크스페이스에서 퀴즈를 만드는 중입니다. 완료 후 다시 시도하세요') from exc
+    except NoValidQuestions as exc:
+        raise HTTPException(422, str(exc)) from exc
     return quizzes.get_public_quiz(quiz_id)
 
 @router.get('/workspaces/{workspace_id}/quizzes', response_model=list[QuizSummary])

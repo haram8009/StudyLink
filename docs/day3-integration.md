@@ -1,5 +1,7 @@
 # 3일차 구현·통합 기록 — 퀴즈·오답노트와 2일차 이월
 
+> 후속 변경(2026-10-22): 퀴즈 설정·부족분 보충·참고 자료 표시의 구현과 검증은 [별도 통합 기록](quiz-customization-integration.md)에 정리했다. 아래 부분 생성 성공 결과는 변경 전 기록이다.
+
 작성일: 2026-10-22 (Asia/Seoul)
 상태: 퀴즈 생성·풀이·채점, 오답노트, 노트 초안, 관련 노트, 평가 도구를 구현하고 통합 확인했다. answer-v4·link_notes·RELATIVE_MARGIN 0.15와 데모 4단계 질문 변경으로 평가 목표(답 있음·답 없음·노트 인용)를 자동 비교 기준으로 충족했다. 사람 판정·데모 리허설은 하지 않았다.
 기준: [3일차 PRD](studylink-day3-prd.md). 담당별 기록: [백엔드](day3-backend.md), [퀴즈 생성](day3-quiz-agent.md), [노트 초안·관련 노트](day3-notes-agent.md), [평가](day3-eval.md), [프런트](day3-frontend.md).

@@ -3,6 +3,7 @@ import sqlite3
 import sys
 import threading
 import types
+import importlib
 from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
@@ -19,25 +20,23 @@ def env(tmp_path, monkeypatch):
     yield tmp_path
     get_settings.cache_clear()
 
-class NoQuizEvidence(Exception):
-    pass
-
-class NoValidQuestions(Exception):
-    pass
+from app.services.quiz_generation import NoQuizEvidence, NoValidQuestions, QuizDeadlineExceeded
 
 def make_question(doc, n, answer='b'):
     return {'stem': f'Q{n}?', 'options': [{'option_id': o, 'text': f'{o}-text-{n}'} for o in 'abcd'],
             'answer_option_id': answer, 'explanation': f'because {n}', 'document_id': doc, 'page': n,
-            'quote': f'quote {n}', 'chunk_id': f'chunk-{n}'}
+            'quote': f'quote {n}', 'chunk_id': f'{doc}-chunk-{n}'}
 
 @pytest.fixture
 def generator(monkeypatch):
     """Stand-in for C's quiz_generation module (contract: generate_quiz_questions, NoQuizEvidence, NoValidQuestions)."""
     state = {'calls': [], 'mode': 'ok', 'doc': None, 'gate': threading.Event(), 'started': threading.Event()}
-    module = types.ModuleType('app.services.quiz_generation')
-    def generate_quiz_questions(workspace_id, count=5):
+    module = importlib.import_module('app.services.quiz_generation')
+    def generate_quiz_questions(workspace_id, count=5, *, difficulty='medium'):
         from app.adapters.gms import ProviderUnavailable
         state['calls'].append((workspace_id, count))
+        with get_connection() as db:
+            doc = db.execute('SELECT id FROM documents WHERE workspace_id=?', (workspace_id,)).fetchone()['id']
         mode = state['mode']
         if mode == 'slow':
             state['started'].set()
@@ -48,12 +47,11 @@ def generator(monkeypatch):
             raise NoValidQuestions('유효 문항 0개')
         if mode == 'down':
             raise ProviderUnavailable('secret-key')
+        if mode == 'deadline':
+            raise QuizDeadlineExceeded('timeout')
         produced = count if mode in ('ok', 'slow') else 2
-        return {'requested_count': count, 'questions': [make_question(state['doc'], i + 1) for i in range(produced)]}
-    module.generate_quiz_questions = generate_quiz_questions
-    module.NoQuizEvidence = NoQuizEvidence
-    module.NoValidQuestions = NoValidQuestions
-    monkeypatch.setitem(sys.modules, 'app.services.quiz_generation', module)
+        return {'requested_count': count, 'questions': [make_question(doc, i + 1) for i in range(produced)]}
+    monkeypatch.setattr(module, 'generate_quiz_questions', generate_quiz_questions)
     return state
 
 @pytest.fixture
@@ -79,8 +77,11 @@ def setup_workspace(client, generator, title='NLP'):
     ws = client.post('/api/workspaces', json={'title': title}).json()['id']
     doc = str(uuid4())
     with get_connection() as db:
-        db.execute("INSERT INTO documents(id,workspace_id,filename,path,page_count,status) VALUES (?,?,?,?,9,'ready')",
+        db.execute("INSERT INTO documents(id,workspace_id,filename,path,page_count,status) VALUES (?,?,?,?,10,'ready')",
                    (doc, ws, 'study.pdf', 'missing.pdf'))
+        for n in range(1, 11):
+            db.execute('INSERT INTO chunks VALUES(?,?,?,?,?,?,?,?)',
+                       (f'{doc}-chunk-{n}', 'doc', doc, n, f'quote {n}\n' + '자료 설명 ' * 50, b'', 'm', 1536))
     generator['doc'] = doc
     return ws, doc
 
@@ -108,22 +109,21 @@ def test_create_quiz_hides_answers_and_lists_recent(client, generator):
     assert not LEAK_KEYS & set(fetched)
     with get_connection() as db:
         row = db.execute('SELECT quote, chunk_id FROM questions WHERE id=?', (first['question_id'],)).fetchone()
-        assert tuple(row) == ('quote 1', 'chunk-1')
+        assert tuple(row) == ('quote 1', f'{doc}-chunk-1')
     listed = client.get(f'/api/workspaces/{ws}/quizzes').json()
     assert listed == [{'quiz_id': quiz['quiz_id'], 'requested_count': 5, 'actual_count': 5,
-                       'created_at': quiz['created_at'], 'submitted_at': None, 'score': None}]
+                       'difficulty': 'medium', 'created_at': quiz['created_at'], 'submitted_at': None, 'score': None}]
     assert client.get('/api/quizzes/missing').status_code == 404
     assert client.get('/api/workspaces/missing/quizzes').status_code == 404
 
 def test_create_quiz_count_partial_and_error_mapping(client, generator):
     ws, _ = setup_workspace(client, generator)
     assert make_quiz(client, ws, count=3)['actual_count'] == 3
-    for bad in (0, 6):
+    for bad in (0, 11, 1.2, '5', True):
         assert client.post(f'/api/workspaces/{ws}/quizzes', json={'count': bad}).status_code == 422
     generator['mode'] = 'partial'
-    partial = make_quiz(client, ws)
-    assert partial['requested_count'] == 5 and partial['actual_count'] == 2 and len(partial['questions']) == 2
-    expected = {'no_evidence': 400, 'invalid': 422, 'down': 503}
+    assert client.post(f'/api/workspaces/{ws}/quizzes', json={}).status_code == 422
+    expected = {'no_evidence': 400, 'invalid': 422, 'down': 503, 'deadline': 503}
     for mode, status in expected.items():
         generator['mode'] = mode
         response = client.post(f'/api/workspaces/{ws}/quizzes', json={})
@@ -131,8 +131,8 @@ def test_create_quiz_count_partial_and_error_mapping(client, generator):
         assert 'secret' not in response.json()['detail']
     assert client.post('/api/workspaces/missing/quizzes', json={}).status_code == 404
     with get_connection() as db:
-        assert db.execute('SELECT count(*) FROM quizzes').fetchone()[0] == 2
-        assert db.execute('SELECT count(*) FROM questions').fetchone()[0] == 5
+        assert db.execute('SELECT count(*) FROM quizzes').fetchone()[0] == 1
+        assert db.execute('SELECT count(*) FROM questions').fetchone()[0] == 3
     generator['mode'] = 'ok'
     assert client.post(f'/api/workspaces/{ws}/quizzes').status_code == 201  # body optional, lock released
 
@@ -304,10 +304,80 @@ def test_quiz_schema_migration_is_idempotent(env):
     from app.main import app
     with TestClient(app) as client:
         quiz = client.get('/api/quizzes/z1').json()
+        assert quiz['difficulty'] is None
         assert quiz['questions'][0]['filename'] == 'old.pdf'
         graded = client.post('/api/quizzes/z1/submit', json={'answers': {'q1': 'b'}}).json()
         assert graded['score'] == 0 and graded['questions'][0]['quote'] == ''
         assert len(client.get('/api/reviews?workspace_id=w1').json()) == 1
+
+
+@pytest.mark.parametrize('difficulty', ['easy', 'medium', 'hard'])
+@pytest.mark.parametrize('count', [1, 10])
+def test_quiz_settings_persist_through_read_list_and_submission(client, generator, count, difficulty):
+    ws, _ = setup_workspace(client, generator)
+    quiz = make_quiz(client, ws, count=count, difficulty=difficulty)
+    assert quiz['requested_count'] == quiz['actual_count'] == len(quiz['questions']) == count
+    assert quiz['difficulty'] == difficulty
+    assert client.get(f'/api/quizzes/{quiz["quiz_id"]}').json()['difficulty'] == difficulty
+    assert client.get(f'/api/workspaces/{ws}/quizzes').json()[0]['difficulty'] == difficulty
+    result = client.post(f'/api/quizzes/{quiz["quiz_id"]}/submit', json={'answers': answers_for(quiz)}).json()
+    assert result['difficulty'] == difficulty and result['score'] == count
+    init_db()
+    assert client.get(f'/api/quizzes/{quiz["quiz_id"]}').json() == result
+
+
+@pytest.mark.parametrize('body', [{'count': 0}, {'count': 11}, {'count': 5.0}, {'count': 1.5},
+                                 {'count': '5'}, {'count': True}, {'count': None},
+                                 {'difficulty': 'unknown'}, {'difficulty': None}])
+def test_invalid_settings_never_call_model_or_write(client, generator, body):
+    ws, _ = setup_workspace(client, generator)
+    assert client.post(f'/api/workspaces/{ws}/quizzes', json=body).status_code == 422
+    assert generator['calls'] == []
+    with get_connection() as db:
+        assert db.execute('SELECT count(*) FROM quizzes').fetchone()[0] == 0
+        assert db.execute('SELECT count(*) FROM questions').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('corruption', ['partial', 'duplicate', 'page', 'chunk', 'quote', 'empty_quote', 'content', 'scope', 'unready'])
+def test_save_guard_rolls_back_invalid_generation(client, generator, corruption):
+    from app.services.quizzes import save_quiz
+    ws, doc = setup_workspace(client, generator)
+    questions = [make_question(doc, i) for i in (1, 2)]
+    if corruption == 'partial':
+        questions.pop()
+    elif corruption == 'duplicate':
+        questions[1] = dict(questions[0])
+    elif corruption in ('page', 'chunk', 'quote', 'empty_quote', 'content'):
+        key, value = {'page': ('page', 3), 'chunk': ('chunk_id', 'missing'),
+                      'quote': ('quote', 'fabricated'), 'empty_quote': ('quote', ''),
+                      'content': ('explanation', ' ')}[corruption]
+        questions[1][key] = value
+    elif corruption == 'scope':
+        other, _ = setup_workspace(client, generator, 'other')
+        with get_connection() as db:
+            db.execute('UPDATE documents SET workspace_id=? WHERE id=?', (other, doc))
+    else:
+        with get_connection() as db:
+            db.execute("UPDATE documents SET status='processing' WHERE id=?", (doc,))
+    with pytest.raises(NoValidQuestions):
+        save_quiz(ws, 2, questions)
+    with get_connection() as db:
+        assert db.execute('SELECT count(*) FROM quizzes').fetchone()[0] == 0
+        assert db.execute('SELECT count(*) FROM questions').fetchone()[0] == 0
+
+
+def test_existing_partial_quiz_remains_readable_and_gradable(client, generator):
+    ws, doc = setup_workspace(client, generator)
+    with get_connection() as db:
+        db.execute("INSERT INTO quizzes(id,workspace_id,requested_count,actual_count,created_at) VALUES('legacy',?,5,1,'old')", (ws,))
+        db.execute('''INSERT INTO questions(id,quiz_id,stem,options_json,answer_option_id,explanation,document_id,page)
+            VALUES('old-question','legacy','old?',?,'a','old explanation',?,1)''',
+            ('[{"option_id":"a","text":"A"},{"option_id":"b","text":"B"}]', doc))
+    init_db()
+    quiz = client.get('/api/quizzes/legacy').json()
+    assert quiz['requested_count'] == 5 and quiz['actual_count'] == 1 and quiz['difficulty'] is None
+    graded = client.post('/api/quizzes/legacy/submit', json={'answers': {'old-question': 'a'}}).json()
+    assert graded['score'] == graded['total'] == 1 and graded['difficulty'] is None
 
 class AnswerNotFound(Exception):
     pass

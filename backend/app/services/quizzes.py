@@ -37,12 +37,42 @@ def generation_turn(workspace_id: str):
         with _generating_guard:
             _generating.discard(workspace_id)
 
-def save_quiz(workspace_id: str, requested_count: int, questions: list[dict]) -> str:
+def save_quiz(workspace_id: str, requested_count: int, questions: list[dict], difficulty: str = 'medium') -> str:
     """Persist a generated quiz and its questions atomically; ids are assigned here."""
+    from .quiz_generation import NoValidQuestions
+    if type(requested_count) is not int or not 1 <= requested_count <= 10 or len(questions) != requested_count:
+        raise NoValidQuestions(f'요청한 {requested_count}문항을 모두 만들지 못했어요. 다시 시도하거나 자료를 추가해 주세요.')
+    if difficulty not in ('easy', 'medium', 'hard'):
+        raise ValueError('invalid quiz difficulty')
+    from ..agents.quiz import check_question, question_fingerprint
+    from ..schemas.quiz_generation import GeneratedQuestion
+    from .quotes import pick_quote
+    from .quiz_generation import MIN_QUOTE_CHARS
     quiz_id = str(uuid4())
     with get_connection() as db:
-        db.execute('INSERT INTO quizzes(id,workspace_id,requested_count,actual_count,created_at,submitted_at) VALUES (?,?,?,?,?,NULL)',
-                   (quiz_id, workspace_id, requested_count, len(questions), _now()))
+        db.execute('BEGIN IMMEDIATE')
+        seen = set()
+        for question in questions:
+            try:
+                draft = GeneratedQuestion.model_validate({key: question[key] for key in GeneratedQuestion.model_fields})
+                fingerprint = question_fingerprint(draft.stem, question['options'])
+                if check_question(draft) or fingerprint in seen:
+                    raise ValueError('invalid or duplicate question')
+                seen.add(fingerprint)
+                evidence = db.execute('''SELECT c.text FROM chunks c JOIN documents d ON c.source_id=d.id
+                    WHERE c.id=? AND c.source_type='doc' AND c.source_id=? AND c.page=?
+                    AND d.workspace_id=? AND d.status='ready' AND c.page>=1 AND c.page<=d.page_count''',
+                    (question.get('chunk_id'), question['document_id'], question['page'], workspace_id)).fetchone()
+                if evidence is None or len(evidence['text'].strip()) < MIN_QUOTE_CHARS:
+                    raise ValueError('invalid evidence')
+                answer = next(o.text for o in draft.options if o.option_id == draft.answer_option_id)
+                expected = pick_quote(evidence['text'], f'{draft.stem} {answer} {draft.explanation}')
+                if not expected.strip() or question.get('quote') != expected:
+                    raise ValueError('invalid quote')
+            except (ValueError, KeyError, StopIteration, TypeError) as exc:
+                raise NoValidQuestions('유효한 문항·근거를 확보하지 못했어요. 다시 시도해 주세요.') from exc
+        db.execute('INSERT INTO quizzes(id,workspace_id,requested_count,actual_count,created_at,submitted_at,difficulty) VALUES (?,?,?,?,?,NULL,?)',
+                   (quiz_id, workspace_id, requested_count, len(questions), _now(), difficulty))
         for question in questions:
             options = [{'option_id': str(o['option_id']), 'text': str(o['text'])} for o in question['options']]
             db.execute('''INSERT INTO questions(id,quiz_id,stem,options_json,answer_option_id,explanation,document_id,page,quote,chunk_id)
@@ -76,12 +106,12 @@ def _stored_result(db, quiz) -> QuizGraded:
         (quiz['id'],))}
     questions = [_graded(row, selected.get(row['id'], '')) for row in _question_rows(db, quiz['id'])]
     return QuizGraded(quiz_id=quiz['id'], workspace_id=quiz['workspace_id'], requested_count=quiz['requested_count'],
-                      actual_count=quiz['actual_count'], created_at=quiz['created_at'], submitted_at=quiz['submitted_at'],
+                      actual_count=quiz['actual_count'], difficulty=quiz['difficulty'], created_at=quiz['created_at'], submitted_at=quiz['submitted_at'],
                       score=sum(q.correct for q in questions), total=len(questions), questions=questions)
 
 def _public_quiz(db, quiz) -> QuizPublic:
     return QuizPublic(quiz_id=quiz['id'], workspace_id=quiz['workspace_id'], requested_count=quiz['requested_count'],
-                      actual_count=quiz['actual_count'], created_at=quiz['created_at'],
+                      actual_count=quiz['actual_count'], difficulty=quiz['difficulty'], created_at=quiz['created_at'],
                       questions=[_public(row) for row in _question_rows(db, quiz['id'])])
 
 def get_quiz(quiz_id: str) -> QuizPublic | QuizGraded:
@@ -99,7 +129,7 @@ def list_quizzes(workspace_id: str, limit: int = RECENT_LIMIT) -> list[QuizSumma
         rows = db.execute('''SELECT z.*, (SELECT COALESCE(SUM(a.correct),0) FROM attempts a JOIN questions q ON q.id=a.question_id
                 WHERE q.quiz_id=z.id) AS correct_count
             FROM quizzes z WHERE z.workspace_id=? ORDER BY z.created_at DESC, z.rowid DESC LIMIT ?''', (workspace_id, limit)).fetchall()
-    return [QuizSummary(quiz_id=r['id'], requested_count=r['requested_count'], actual_count=r['actual_count'],
+    return [QuizSummary(quiz_id=r['id'], requested_count=r['requested_count'], actual_count=r['actual_count'], difficulty=r['difficulty'],
                         created_at=r['created_at'], submitted_at=r['submitted_at'],
                         score=r['correct_count'] if r['submitted_at'] else None) for r in rows]
 

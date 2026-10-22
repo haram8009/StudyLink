@@ -46,6 +46,12 @@ function writeAnswers(quizId, value) {
 const isGraded = (quiz) => !!quiz?.submitted_at && quiz.questions?.some((q) => "answer_option_id" in q);
 const optionText = (options, optionId) => options?.find((o) => o.option_id === optionId)?.text;
 const LETTERS = "ABCDEFGH";
+const DIFFICULTIES = {
+  easy: { label: "쉬움", description: "자료에 명시된 개념·용어·사실을 확인해요." },
+  medium: { label: "보통", description: "자료의 원리·관계·차이를 이해하고 비교해요." },
+  hard: { label: "어려움", description: "자료 안의 근거로 조건에 따른 적용·판단을 해요." },
+};
+const difficultyLabel = (value) => DIFFICULTIES[value]?.label || "난이도 미지정";
 
 // 워크스페이스 상세(제목·자료·노트)를 불러오고 열람 패널 상태를 관리하는 공통 틀.
 function useStudyWorkspace(id) {
@@ -176,14 +182,30 @@ function EvidenceChip({ item, workspace, onOpen, selected }) {
     return (
       <span className="evidence-chip unavailable" title="자료가 삭제됐거나 처리 실패 상태예요">
         <FileX size={12} />
-        {item.filename || "자료"} · {item.page}페이지 · 원문을 열 수 없음
+        {item.filename || "자료명 확인 불가"} · {item.page}페이지 · 원문을 열 수 없음
       </span>
     );
   return (
     <button className={`evidence-chip ${selected ? "selected" : ""}`} onClick={onOpen}>
       <FileText size={12} />
-      {item.filename || "자료"} · {item.page}페이지
+      {item.filename || "자료명 확인 불가"} · {item.page}페이지
     </button>
+  );
+}
+
+function ReferenceMaterial({ item, ws, from }) {
+  return (
+    <section className="reference-material" aria-label="참고 자료">
+      <strong>참고 자료</strong>
+      <EvidenceChip item={item} workspace={ws.workspace}
+        selected={ws.viewer?.from === from} onOpen={() => ws.openEvidence(item, from)} />
+      {item.quote?.trim() ? <blockquote className="viewer-quote">{item.quote}</blockquote>
+        : <p className="muted">저장된 인용문 없음</p>}
+      <button className="text-button" disabled={!docAvailable(ws.workspace, item.document_id)}
+        onClick={() => ws.openEvidence(item, from)}>
+        <BookOpen size={14} />{docAvailable(ws.workspace, item.document_id) ? "원문 열기" : "원문을 열 수 없음"}
+      </button>
+    </section>
   );
 }
 
@@ -201,7 +223,10 @@ export function QuizPage() {
     [generating, setGenerating] = useState(false),
     [elapsed, setElapsed] = useState(0),
     [genError, setGenError] = useState(""),
+    [count, setCount] = useState(5),
+    [difficulty, setDifficulty] = useState("medium"),
     [scenario, setScenario] = useState("normal");
+  const generationLock = useRef(false);
   const loadList = useCallback(() => {
     setListLoading(true);
     setListError("");
@@ -221,19 +246,29 @@ export function QuizPage() {
   }, [generating]);
 
   async function create() {
-    if (generating) return;
+    if (generationLock.current) return;
+    generationLock.current = true;
     setGenerating(true);
     setGenError("");
     if (isMock) setMockQuizScenario(scenario);
     try {
-      const quiz = await api.createQuiz(id, 5);
+      const quiz = await api.createQuiz(id, count, difficulty);
       loadList();
       navigate(`/w/${id}/quiz/${quiz.quiz_id}`, { state: { created: quiz } });
     } catch (e) {
       setGenError(e.message);
     } finally {
+      generationLock.current = false;
       setGenerating(false);
     }
+  }
+  async function openLegacyFixture() {
+    if (generationLock.current) return;
+    try {
+      const quiz = await api.previewLegacyQuiz(id);
+      loadList();
+      navigate(`/w/${id}/quiz/${quiz.quiz_id}`, { state: { created: quiz } });
+    } catch (e) { setGenError(e.message); }
   }
   const readyDocs = ws.workspace?.documents?.filter((d) => d.status === "ready").length || 0;
   const created =
@@ -250,33 +285,58 @@ export function QuizPage() {
           <span className="count">{list.length}</span>
         </div>
         <div className="chat-list-body">
+          <fieldset className="quiz-settings" disabled={generating}>
+            <legend>새 퀴즈 설정</legend>
+            <label>문항 수
+              <select value={count} onChange={(e) => setCount(Number(e.target.value))}>
+                {Array.from({ length: 10 }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}문항</option>)}
+              </select>
+            </label>
+            <label>난이도
+              <select value={difficulty} onChange={(e) => setDifficulty(e.target.value)} aria-describedby="difficulty-description">
+                {Object.entries(DIFFICULTIES).map(([value, entry]) => <option key={value} value={value}>{entry.label}</option>)}
+              </select>
+            </label>
+            <p id="difficulty-description">{DIFFICULTIES[difficulty].description}</p>
+            <p className="quiz-setting-summary">{count}문항 · {difficultyLabel(difficulty)}</p>
+          </fieldset>
           <button
             className="primary new-quiz"
             onClick={create}
             disabled={generating || !readyDocs}
-            title={readyDocs ? "처리 완료 자료에서 5문항을 만들어요" : "처리 완료된 자료가 있어야 퀴즈를 만들 수 있어요"}
+            title={readyDocs ? `처리 완료 자료에서 ${count}문항 · ${difficultyLabel(difficulty)} 퀴즈를 만들어요` : "처리 완료된 자료가 있어야 퀴즈를 만들 수 있어요"}
           >
             {generating ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />}
             {generating ? "문항 만드는 중…" : "새 퀴즈 만들기"}
           </button>
           {isMock && (
+            <div className="mock-tools">
             <label className="mock-scenario">
               목 시나리오
               <select value={scenario} onChange={(e) => setScenario(e.target.value)} disabled={generating}>
-                <option value="normal">정상 5문항</option>
-                <option value="partial">부분 생성(3문항)</option>
-                <option value="zero">0문항(422)</option>
+                <option value="normal">요청 수만큼 생성</option>
+                <option value="refill">탈락 후 보충 성공</option>
+                <option value="exhausted">보충 소진(422)</option>
+                <option value="deadline">시간 초과(503)</option>
+                <option value="busy">동시 생성(409)</option>
+                <option value="no_evidence">출제 근거 없음(400)</option>
                 <option value="unavailable">공급자 장애(503)</option>
-                <option value="missing_doc">근거 자료 없음 1문항</option>
+                <option value="missing_doc">원문 열람 불가</option>
+                <option value="missing_quote">저장된 인용문 없음</option>
+                <option value="missing_filename">자료명 확인 불가·긴 자료명</option>
               </select>
             </label>
+            <button className="text-button" onClick={openLegacyFixture} disabled={generating || !readyDocs}>
+              이전 부분 퀴즈 예시 열기
+            </button>
+            </div>
           )}
           {generating && (
             <div className="generating" role="status">
               <LoaderCircle size={14} className="spin" />
               <span>
-                자료에서 문항을 만들고 검증하는 중… {elapsed}초
-                <small>보통 30초 안팎, 길어도 45초 정도 걸려요.</small>
+                {count}문항 · {difficultyLabel(difficulty)} 생성·검증 중… {elapsed}초
+                <small>부족한 문항은 자동으로 보충해요. 최대 120초 동안 시도하며, 요청한 수를 모두 채우면 열려요.</small>
               </span>
             </div>
           )}
@@ -303,6 +363,7 @@ export function QuizPage() {
                   {q.submitted_at ? `${q.score ?? "-"} / ${q.actual_count}점` : `풀이 중 · ${q.actual_count}문항`}
                 </strong>
                 <small>
+                  {q.actual_count}문항 · {difficultyLabel(q.difficulty)}<br />
                   {shortTime(q.created_at)}
                   {q.actual_count < q.requested_count ? ` · ${q.requested_count}문항 중 ${q.actual_count}문항` : ""}
                 </small>
@@ -331,7 +392,7 @@ export function QuizPage() {
             </span>
             <h2>워크스페이스 자료로 이해도를 점검해 보세요</h2>
             <p>
-              처리 완료된 자료의 서로 다른 페이지에서 4지선다 5문항을 만들어요.
+              처리 완료된 자료로 4지선다 {count}문항 · {difficultyLabel(difficulty)} 퀴즈를 만들어요.
               <br />
               어느 채팅에서 들어와도 같은 퀴즈 목록과 오답노트를 봐요.
             </p>
@@ -425,12 +486,12 @@ function QuizRunner({ quizId, initial, ws, workspaceId, onSubmitted }) {
         )}
       </div>
       <div className="quiz-body">
+        <p className="quiz-setting-summary">{quiz.actual_count ?? questions.length}문항 · {difficultyLabel(quiz.difficulty)}</p>
         {partial && (
           <div className="note-warning" role="status">
             <CircleAlert size={14} />
             <span>
-              <b>{quiz.actual_count}문항만 만들었습니다.</b> 요청한 {quiz.requested_count}문항 중 근거와 형식 검증을
-              통과한 문항만 냈어요.
+              <b>이전 방식으로 만든 {quiz.actual_count}문항 퀴즈예요.</b> 당시 요청은 {quiz.requested_count}문항이었으며, 그대로 풀고 제출할 수 있어요.
             </span>
           </div>
         )}
@@ -521,7 +582,7 @@ function QuestionCard({ index, q, graded, selected, missing, onChoose, ws }) {
             item={q}
             workspace={ws.workspace}
             selected={ws.viewer?.from === from}
-            onOpen={() => ws.openEvidence(q, from)}
+            onOpen={() => ws.openEvidence(graded ? q : { ...q, quote: undefined }, from)}
           />
         </div>
         {graded ? (
@@ -573,11 +634,7 @@ function QuestionCard({ index, q, graded, selected, missing, onChoose, ws }) {
         <div className="explanation">
           <strong>해설</strong>
           <p>{q.explanation}</p>
-          {q.quote && (
-            <button className="quote-link" onClick={() => ws.openEvidence(q, from)} disabled={!docAvailable(ws.workspace, q.document_id)}>
-              <blockquote className="viewer-quote">{q.quote}</blockquote>
-            </button>
-          )}
+          <ReferenceMaterial item={q} ws={ws} from={from} />
         </div>
       )}
     </li>
@@ -789,7 +846,7 @@ function ReviewDetail({ reviewId, ws, workspaceId, onUpdated }) {
           <div className="explanation">
             <strong>해설</strong>
             <p>{review.explanation}</p>
-            {review.quote && <blockquote className="viewer-quote">{review.quote}</blockquote>}
+            <ReferenceMaterial item={review} ws={ws} from={from} />
           </div>
         </div>
 

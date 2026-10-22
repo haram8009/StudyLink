@@ -53,8 +53,8 @@ const enc = encodeURIComponent;
 export const quizMessages = {
   400: "출제할 자료가 없습니다. PDF를 올리고 처리가 끝난 뒤 다시 만들어 주세요.",
   409: "이 워크스페이스의 퀴즈를 만드는 중입니다. 끝난 뒤 다시 시도해 주세요.",
-  422: "자료에서 문항을 하나도 만들지 못했습니다. 잠시 후 다시 시도해 주세요.",
-  503: "문항을 만드는 모델 서비스에 일시적으로 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+  422: "요청한 수의 유효 문항을 채우지 못했습니다. 자료를 추가하거나 문항 수를 줄여 다시 시도해 주세요.",
+  503: "생성 제한 시간에 도달했거나 모델 서비스에 연결하지 못했습니다. 잠시 후 같은 설정으로 다시 시도해 주세요.",
 };
 const submitMessages = {
   422: "모든 문항에 답했는지 확인해 주세요. 제출 내용은 저장되지 않았습니다.",
@@ -106,8 +106,8 @@ const real = {
     }),
   related: (value) => request("/notes/related", json(value)),
   // 3일차: 퀴즈·오답
-  createQuiz: (id, count = 5) =>
-    request(`/workspaces/${enc(id)}/quizzes`, json({ count }), quizMessages),
+  createQuiz: (id, count = 5, difficulty = "medium") =>
+    request(`/workspaces/${enc(id)}/quizzes`, json({ count, difficulty }), quizMessages),
   quizzes: (id) => request(`/workspaces/${enc(id)}/quizzes`),
   quiz: (id) => request(`/quizzes/${enc(id)}`),
   submitQuiz: (id, answers) =>
@@ -485,7 +485,9 @@ const mock = {
     return mockRelated(`${title} ${body}`, exclude_note_id);
   },
   // ------------------------------- 3일차: 퀴즈 -------------------------------
-  async createQuiz(workspaceId, count = 5) {
+  async createQuiz(workspaceId, count = 5, difficulty = "medium") {
+    if (!Number.isInteger(count) || count < 1 || count > 10 || !["easy", "medium", "hard"].includes(difficulty))
+      throw new ApiError(422, "문항 수는 정수 1~10, 난이도는 쉬움·보통·어려움 중에서 선택해 주세요.");
     if (quizInflight.has(workspaceId)) throw new ApiError(409, quizMessages[409]);
     quizInflight.add(workspaceId);
     try {
@@ -498,10 +500,13 @@ const mock = {
       const scenario = mockQuizScenario;
       if (scenario === "unavailable")
         throw new ApiError(503, "모델 서비스에 연결할 수 없습니다. 잠시 후 재시도하세요");
-      if (scenario === "zero")
-        throw new ApiError(422, "유효한 문항을 하나도 만들지 못했습니다. 다시 시도해 주세요.");
-      const requested = Math.min(5, Math.max(1, Number(count) || 5));
-      const actual = scenario === "partial" ? Math.min(3, requested) : requested;
+      if (scenario === "zero" || scenario === "exhausted") throw new ApiError(422, quizMessages[422]);
+      if (scenario === "deadline") throw new ApiError(503, "생성 제한 시간(120초)에 도달했습니다. 잠시 후 재시도하거나 문항 수를 줄여 주세요.");
+      if (scenario === "busy") throw new ApiError(409, quizMessages[409]);
+      if (scenario === "no_evidence") throw new ApiError(400, quizMessages[400]);
+      if (scenario === "refill") await delay(1000);
+      const requested = count;
+      const actual = requested;
       const offset = readItems("quizzes").filter((q) => q.workspace_id === workspaceId).length;
       const questions = Array.from({ length: actual }, (_, i) => {
         const bank = QUESTION_BANK[(i + offset) % QUESTION_BANK.length];
@@ -518,11 +523,11 @@ const mock = {
           stem: bank.stem,
           options,
           document_id: missing ? "deleted-document" : doc.id,
-          filename: missing ? "삭제된 자료.pdf" : doc.filename,
+          filename: scenario === "missing_filename" ? (i === 0 ? "" : "아주 긴 자료명을 사용하는 자연어처리 학습 자료와 개념 정리 및 복습을 위한 상세 참고 자료.pdf") : missing ? "삭제된 자료.pdf" : doc.filename,
           page,
           answer_option_id: options.find((o) => o.text === bank.answer).option_id,
           explanation: bank.explanation,
-          quote: `목 모드 발췌 · ${page}페이지. ${bank.quote}`,
+          quote: scenario === "missing_quote" ? "" : `목 모드 발췌 · ${page}페이지. ${bank.quote}`,
         };
       });
       const quiz = {
@@ -530,6 +535,7 @@ const mock = {
         workspace_id: workspaceId,
         requested_count: requested,
         actual_count: actual,
+        difficulty,
         created_at: now(),
         submitted_at: null,
         score: null,
@@ -542,6 +548,24 @@ const mock = {
       quizInflight.delete(workspaceId);
     }
   },
+  async previewLegacyQuiz(workspaceId) {
+    // 별도 목 fixture: 신규 생성 성공 계약과 구별해 과거 부분 퀴즈만 재현한다.
+    const ready = read().find((w) => w.id === workspaceId)?.documents?.find((d) => d.status === "ready");
+    if (!ready) throw new ApiError(400, quizMessages[400]);
+    const fixture = {
+      quiz_id: crypto.randomUUID(), workspace_id: workspaceId,
+      requested_count: 5, actual_count: 3, difficulty: null,
+      created_at: now(), submitted_at: null, score: null, attempts: null,
+      questions: QUESTION_BANK.slice(0, 3).map((bank) => ({
+        question_id: crypto.randomUUID(), stem: bank.stem,
+        options: [bank.answer, ...bank.wrong].map((text, i) => ({ option_id: String(i), text })),
+        answer_option_id: "0", explanation: bank.explanation, quote: "",
+        document_id: ready.id, filename: ready.filename, page: 1,
+      })),
+    };
+    saveItems("quizzes", [...readItems("quizzes"), fixture]);
+    return quizPublic(fixture);
+  },
   async quizzes(workspaceId) {
     await delay();
     if (!read().some((w) => w.id === workspaceId)) throw notFound("워크스페이스");
@@ -549,10 +573,11 @@ const mock = {
       .filter((q) => q.workspace_id === workspaceId)
       .sort((a, b) => b.created_at.localeCompare(a.created_at))
       .slice(0, 20)
-      .map(({ quiz_id, requested_count, actual_count, created_at, submitted_at, score }) => ({
+      .map(({ quiz_id, requested_count, actual_count, difficulty, created_at, submitted_at, score }) => ({
         quiz_id,
         requested_count,
         actual_count,
+        difficulty: difficulty ?? null,
         created_at,
         submitted_at,
         score,
@@ -638,7 +663,7 @@ const mock = {
   },
 };
 
-// 목 퀴즈 시나리오(화면의 목 전용 선택 상자에서 바꾼다): normal | partial | zero | unavailable | missing_doc
+// 목 시나리오는 생성 성공 시 항상 요청 수를 채운다. 과거 부분 퀴즈는 별도 fixture다.
 let mockQuizScenario = "normal";
 export const setMockQuizScenario = (value) => {
   mockQuizScenario = value;
@@ -665,12 +690,18 @@ const quizPublic = (q) => ({
   workspace_id: q.workspace_id,
   requested_count: q.requested_count,
   actual_count: q.actual_count,
+  difficulty: q.difficulty ?? null,
   created_at: q.created_at,
   submitted_at: null,
   questions: q.questions.map(publicQuestion),
 });
 const quizGraded = (q) => ({
   quiz_id: q.quiz_id,
+  workspace_id: q.workspace_id,
+  requested_count: q.requested_count,
+  actual_count: q.actual_count,
+  difficulty: q.difficulty ?? null,
+  created_at: q.created_at,
   score: q.score,
   total: q.questions.length,
   submitted_at: q.submitted_at,
@@ -727,6 +758,41 @@ function mockRelated(text, excludeId) {
     .map(({ n }) => ({ note_id: n.id, title: n.title, snippet: n.body.slice(0, 160) }));
 }
 const QUESTION_BANK = [
+  {
+    stem: "어텐션에서 Value 벡터를 합칠 때 사용하는 값은?",
+    answer: "Query와 Key의 유사도로 계산한 가중치",
+    wrong: ["입력 문장의 글자 수", "항상 동일한 상수", "정답 레이블의 번호"],
+    explanation: "Query와 Key의 유사도에 softmax를 적용한 가중치로 Value를 합한다.",
+    quote: "어텐션은 Query와 Key로 얻은 가중치에 따라 Value를 가중 합산한다.",
+  },
+  {
+    stem: "위치 인코딩이 Transformer에 제공하는 정보는?",
+    answer: "입력 토큰의 순서와 위치",
+    wrong: ["정답 레이블", "GPU의 메모리 주소", "학습 데이터의 파일명"],
+    explanation: "위치 인코딩은 토큰 표현에 순서 정보를 더한다.",
+    quote: "위치 인코딩은 입력 토큰의 위치 정보를 임베딩에 추가한다.",
+  },
+  {
+    stem: "학습 데이터에 과적합한 모델에서 흔히 나타나는 현상은?",
+    answer: "학습 성능은 높지만 새로운 데이터의 성능은 낮다",
+    wrong: ["모든 데이터에서 항상 완벽하다", "학습 손실이 항상 증가한다", "파라미터가 자동으로 삭제된다"],
+    explanation: "과적합은 학습 데이터에 지나치게 맞춰져 새로운 데이터에 일반화하지 못하는 현상이다.",
+    quote: "과적합은 학습 데이터의 특성에 지나치게 적응하여 일반화 성능이 떨어지는 현상이다.",
+  },
+  {
+    stem: "모델 학습에서 손실 함수가 나타내는 것은?",
+    answer: "예측값과 목표값 사이의 차이를 측정한 값",
+    wrong: ["파일의 저장 용량", "입력 장치의 속도", "서버의 남은 메모리"],
+    explanation: "손실 함수는 예측의 오차를 수치로 표현하며 최적화의 기준이 된다.",
+    quote: "학습은 예측과 목표의 차이를 나타내는 손실을 줄이는 방향으로 진행된다.",
+  },
+  {
+    stem: "미니배치 학습에서 한 번의 갱신에 사용하는 것은?",
+    answer: "학습 데이터의 일부로 구성한 묶음",
+    wrong: ["항상 모든 데이터", "오직 검증 데이터", "학습된 파라미터의 파일명"],
+    explanation: "미니배치는 일부 데이터를 묶어 손실과 기울기를 계산한다.",
+    quote: "미니배치 학습은 일부 샘플을 묶어 기울기를 계산하고 파라미터를 갱신한다.",
+  },
   {
     stem: "Residual connection(잔차 연결)을 쓰는 주된 이유로 가장 알맞은 것은?",
     answer: "깊은 층에서도 기울기 소실을 줄여 학습을 안정시키기 위해",

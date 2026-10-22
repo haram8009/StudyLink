@@ -1,8 +1,11 @@
 # StudyLink 시제품 시스템 아키텍처 v1
 
+후속 요구사항(2026-10-22): [워크스페이스 개요·채팅 분리와 PDF 추가 업로드 PRD](2026-10-22-01-workspace-overview-pdf-upload-prd.md). 초안이며 구현·실행 검증 전이다. 7절의 경로 분리를 실제 화면에 적용하고 기존 업로드·상태 조회·재시도 계약을 개요에서 재사용한다. 현재 코드의 `/w/:id`는 여전히 채팅·공통 자원을 함께 표시하므로 설계 경로와 구현 완료 여부를 구분한다.
+
 작성일: 2026-10-21 (Asia/Seoul)  
 상태: 시제품 설계. 1일차 범위의 구현·통합 확인을 마쳤으며 후속 범위는 설계로 남아 있다.  
 구현 진행: [1일차 구현·통합 검증 결과](day1-integration.md). 아래 설계 전체가 구현됐다는 의미는 아니다.  
+화면 개선: [2026-10-22 UI 개선·검증 기록](ui-polish-2026-10-22.md). 기능 범위·API 계약 변경 없음.
 기준 문서: [studylink-implementation-plan-v1.1.md](studylink-implementation-plan-v1.1.md) (구현기획서 v1.1)
 문서 점검: [2026-10-21 점검 결과·후속 작업](studylink-design-review-2026-10-21.md) — 항목별 반영 상태는 보고서 상단을 따른다.
 
@@ -117,7 +120,7 @@ def answer_question(workspace_id: str, question: str, include_notes=True, *,
 # services/note_draft.py
 def draft_note(answer_id: str) -> dict                 # title, body, citations(노트 저장 입력 형식 id=cN), fallback
 # services/quiz_generation.py (C, 저장 안 함) → services/quizzes.py (B, 저장·채점)
-def generate_quiz_questions(workspace_id: str, count=5) -> dict  # requested_count, 검증·섞기 완료 문항
+def generate_quiz_questions(workspace_id: str, count=5, *, difficulty='medium', rng=None) -> dict  # requested_count, difficulty, 정확히 count개의 검증·섞기 완료 문항
 def submit_quiz(quiz_id: str, answers: dict[str, str]) -> QuizGraded
 # adapters/gms.py
 def embed(texts: list[str]) -> np.ndarray              # (n, dim) float32
@@ -134,8 +137,8 @@ def generate_json(prompt: str, schema: type[BaseModel]) -> BaseModel
 | 공통 실행 상태 | request_id, workspace_id(해당 시), retry_count, validation_errors, status | 요청 구분·검증 결과·종료 분기. 키·DB 연결·HTTP 클라이언트는 상태에 넣지 않는다 |
 | AnswerState | question, include_notes, evidences, draft, result | 허용된 범위의 근거와 답변 초안·최종 결과 |
 | NoteDraftState | answer_id, source_answer, draft, result, fallback | 원 답변 인용 범위와 초안 검증 |
-| QuizState | count, evidences, question_results | 문항 분배와 결과 취합 |
-| QuestionState | question_key, evidence, draft, retry_count, validation_errors, result | 각 병렬 문항의 독립 생성·검증·재시도 |
+| QuizState | count, difficulty, deadline, evidences, results, questions, round, excluded, round_history, calls | 요청별 문항 분배, 유효 문항 보존, 중복 제거와 부족분 보충 |
+| QuestionState | question_key, evidence, difficulty, draft, attempts, validation_errors, result | 각 병렬 문항의 독립 생성·검증·재시도. 라운드·슬롯 키로 취합 |
 
 상태는 TypedDict로 명시하고 외부 입력·모델 출력은 Pydantic으로 검증한다. 각 노드는 상태 변경분만 반환한다. 퀴즈 병렬 결과는 question_key별 맵을 병합하는 reducer로 취합하고, 같은 키의 중복 기록을 검출한다. 분기 내부의 retry_count를 부모 그래프에서 공유하지 않는다.
 
@@ -143,7 +146,7 @@ def generate_json(prompt: str, schema: type[BaseModel]) -> BaseModel
 | --- | --- |
 | 답변 | START → retrieve → check_evidence. 근거가 충분하면 generate, 약하고 재검색 0회면 rewrite_query → retrieve(1회), 재검색 후에도 약하면 abstain → END. generate → validate. 성공하면 finalize → END, 출력 오류이고 재시도 0회면 retry_count를 증가시켜 generate, 소진하면 abstain → END |
 | 초안 | START → check_source → summarize → validate. 원 답변 근거 부족은 422로 종료. 성공하면 finalize → END, 출력 오류는 1회 재생성 후 fallback → END. 공급자 장애는 바로 fallback |
-| 퀴즈 | START → select_evidence → Send로 question 서브그래프 실행 → collect → END. 각 서브그래프는 generate → validate → 성공 종료 또는 1회 재생성 후 제외. 취합 후 유효 문항 0개는 422, 공급자 전체 장애는 503 |
+| 퀴즈 | START → select_evidence → Send로 부족한 슬롯의 question 서브그래프 실행 → collect → 요청 수 충족 시 END, 부족하면 다음 라운드. 문항별 최초+재생성 1회, 부모 최대 5라운드·120초. 검증 소진 422, 시간 초과·전체 공급자 장애 503. 부분 결과는 저장하지 않음 |
 
 - 세 그래프는 고정 흐름이다. 다음 노드는 코드의 검증 결과로만 정하며 LLM이 도구나 경로를 고르지 않는다(2026-10-21 결정). 유일한 예외적 판단 지점은 답변 그래프의 재검색이다.
 - 재검색(rewrite_query): 근거가 약하면(후보 0개 또는 최고 점수가 기준 미만) LLM이 질문을 검색용 질의 하나로 다시 쓰고 1회 더 검색한다. 모델은 질의 문자열만 출력하며 검색 범위는 바꾸지 못한다. 두 검색 결과는 chunk_id로 합쳐(같은 청크는 높은 점수) 4.2절 선택 규칙을 다시 적용한다. 생성 프롬프트에는 원 질문을 쓴다. "근거가 약함"은 최소 점수를 넘는 후보가 0개인 경우다. AnswerState에 rewritten_query·research_count를 두고 trace에 재검색 여부를 기록한다.
@@ -237,6 +240,17 @@ SELECT c.* FROM chunks c
 
 ### 4.4 퀴즈 생성·채점 (C09, C10)
 
+변경(2026-10-22): [퀴즈 변경 PRD](quiz-customization-prd.md)를 적용한다. 세부 검증 결과는 [변경 통합 기록](quiz-customization-integration.md)에 둔다.
+
+- 설정: 엄격한 정수 1~10문항(기본 5), 난이도 `easy|medium|hard`(기본 `medium`). 난이도는 생성·조회·제출·목록에 포함하고 이전 DB 행은 `NULL`로 이관한다.
+- 부모 그래프는 ready 자료의 유효한 문서 청크를 모아 요청 수만큼 슬롯을 만든다. 근거가 적으면 재사용하되 다른 학습 포인트를 요구한다. 최초 포함 5라운드, 슬롯당 최대 2회, 요청 예산 120초, 동시 실행 5개다.
+- 취합 시 공백·대소문자·선택지 순서를 정규화해 동일 문항을 제거한다. 통과 문항은 보존하고 부족분만 다시 생성한다. 이미 채택한 문제·선택지를 보충 프롬프트에 전달하며 다른 근거를 우선한다.
+- 문항 구조와 자료·워크스페이스·페이지·청크 관계, 비어 있지 않은 서버 추출 인용문을 검증한다. 저장 서비스도 개수·중복·구조·근거·인용문을 검사하고 퀴즈와 문항을 원자적으로 저장한다. 신규 성공은 `requested_count = actual_count = 문항 수`다.
+- 근거 없음 400, 같은 워크스페이스 생성 중 409, 검증·중복 보충 소진 422, 시간 부족·공급자 전체 장애 503이다. 모든 종료 경로에서 잠금을 풀고 실패한 문항은 저장하지 않는다.
+- 제출 전 `QuestionPublic`은 정답·해설·quote를 노출하지 않는다. 채점 후와 오답 상세에는 해설 아래 참고 자료명·페이지·인용문·원문 열기를 함께 둔다. 원문 열람 불가·인용문 누락에도 저장된 해설은 유지한다. 기존 제출 1회 확정과 과거 부분 퀴즈의 조회·채점은 보존한다.
+
+다음 번호 목록은 변경 전 3일차 구현 기록이다. 부분 성공·5문항 고정 정책은 위 계약으로 대체한다.
+
 1. 근거 샘플링: 현재 공간 문서 청크 중 200자 이상인 것을, 가능하면 서로 다른 페이지에서 5개 고른다.
 2. 문항 생성: LangGraph `Send`로 근거별 문항 서브그래프에 분기한다(동시 실행 최대 5). 각 분기는 독립 상태로 생성·검증·재시도하며 같은 요청 trace 아래 기록한다. 결과는 question_key 기준으로 취합한다.
 3. 검증(코드): 스키마, 선택지 4개·중복 없음, 정답 ID 유효. 실패하면 1회 재생성하고, 그래도 실패하면 제외한다. document_id·page는 모델 출력이 아니라 근거 청크에서 채운다.
@@ -269,7 +283,7 @@ HTTP 어댑터는 새로 작성한다. GMS의 채팅·임베딩 경로, 인증 �
 | 모델 호출 | httpx 기반 GMS 어댑터. `generate_json(prompt, schema)`와 `embed(texts)`로 제공. LangChain 모델 래퍼를 사용하지 않는다 |
 | 출력 검증 | Pydantic 파싱 오류는 ModelOutputError. 그래프가 검증 오류를 상태에 넣고 1회 재생성한 뒤 답변 보류·초안 fallback·문항 제외로 종료 |
 | 통신 오류 | HTTP 호출 타임아웃 20초(실측 생성 1회 약 2초 기준, 2026-10-21 결정). 일시적 오류에만 1회 재시도. 인증·잘못된 요청은 즉시 실패. 최종 ProviderUnavailable은 답변 503, 초안 fallback, 퀴즈 전체 공급자 장애 503 |
-| 재시도 예산 | 통신 재시도는 어댑터, 출력 재생성·재검색은 그래프 한 곳에서만 수행한다. 출력 생성 2회 × 통신 최대 2회로 생성 호출은 작업당 최대 4회. 답변 그래프는 재검색 1회(질의 재작성 호출 1회 + 임베딩 1회)가 더해질 수 있다. 요청 전체 deadline(2026-10-21 결정): 질의응답 30초 초과 시 503, 노트 초안 20초 초과 시 결정적 fallback, 퀴즈 45초 초과 시 끝나지 않은 문항은 제외하고 부분 생성 규칙 적용. 각 노드는 모델 호출 전에 남은 시간을 확인하고, 남은 시간이 HTTP 타임아웃보다 짧으면 그 시간을 타임아웃으로 쓴다. 목표 지연(질의응답·초안 10초, 퀴즈 30초)은 그대로 둔다 |
+| 재시도 예산 | 통신 재시도는 어댑터, 출력 재생성·재검색은 그래프가 관리한다. 답변·초안은 출력 생성 2회 × 통신 최대 2회이며 답변 재검색은 질의 재작성·임베딩을 더한다. 퀴즈는 2026-10-22부터 최초 포함 5라운드·슬롯당 최대 2회이므로 업무 생성 최대 10N회, 각 호출의 통신 재시도는 별도다. 요청 deadline: 질의응답 30초 초과 503, 초안 20초 초과 fallback, 퀴즈 120초 또는 새 호출에 필요한 시간 부족 시 503·저장 없음. 각 노드와 어댑터가 남은 시간을 확인해 HTTP 타임아웃을 줄인다. 기존 퀴즈 45초·부분 성공 정책은 폐기했다. 목표 지연과 실제 실행 예산은 구분한다 |
 | trace 단위 | 그래프 요청 1개 = root trace 1개. `ask`, `note_draft`, `quiz_generate`. 수집·관련 노트 검색도 별도 trace |
 | trace 내용 | 그래프 노드는 span, 모델 호출은 generation으로 직접 계측. request_id, workspace_id, 선택 chunk_id·점수, 모델·프롬프트 버전, 재시도·fallback 여부 기록. 토큰 사용량은 공급자가 반환할 때만 기록 |
 | 병렬 실행 | 루트 관측(`start_as_current_observation`)을 연 상태에서 `graph.invoke`를 호출하면 `Send` 분기 스레드로 컨텍스트가 전파돼 한 trace로 묶인다(2026-10-21 확인, 12절). 그래프 실행을 루트 관측 밖에서 시작하지 않는다 |
