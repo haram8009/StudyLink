@@ -1,5 +1,7 @@
 # StudyLink 시제품 시스템 아키텍처 v1
 
+도메인 전환(2026-10-22): [정보처리기사 실기 대비 전환 PRD](2026-10-22-02-ipe-practical-prd.md), [ADR 0003](adr/0003-ipe-practical-domain-and-sources.md). 초안이며 구현 전이다. 4.1·4.2·4.4·5·6절에 변경점을 표시했다.
+
 후속 요구사항(2026-10-22): [워크스페이스 개요·채팅 분리와 PDF 추가 업로드 PRD](2026-10-22-01-workspace-overview-pdf-upload-prd.md). 초안이며 구현·실행 검증 전이다. 7절의 경로 분리를 실제 화면에 적용하고 기존 업로드·상태 조회·재시도 계약을 개요에서 재사용한다. 현재 코드의 `/w/:id`는 여전히 채팅·공통 자원을 함께 표시하므로 설계 경로와 구현 완료 여부를 구분한다.
 
 작성일: 2026-10-21 (Asia/Seoul)  
@@ -161,6 +163,8 @@ def generate_json(prompt: str, schema: type[BaseModel]) -> BaseModel
 
 ### 4.1 PDF 업로드·수집 (C02)
 
+변경(2026-10-22, 구현 전): 수집 서비스가 페이지 텍스트에서 문항 라벨을 찾아 청크 앞에 붙인다(형식을 모르면 생략). 텍스트 자료(위키 개념 사전)는 업로드가 아니라 서버 시작 시 시드 JSON에서 기본 워크스페이스로 멱등 수집하며, 절마다 청크를 만들고 `page`에 절 번호를 넣는다. 출제기준 태그는 document_topics에 저장한다.
+
 1. `POST /api/workspaces/{id}/documents`: 확장자·MIME 확인(422), 크기 제한 예: 30MB(413).
 2. 파일을 `data/uploads/{document_id}.pdf`로 저장하고 documents에 status=processing으로 기록한 뒤 즉시 응답한다.
 3. FastAPI BackgroundTasks에서 `ingest_document`를 실행한다.
@@ -172,6 +176,8 @@ def generate_json(prompt: str, schema: type[BaseModel]) -> BaseModel
 5. **[P3 결정]** 서버 시작 시 남은 processing을 failed로 바꾸고 retry API로 다시 수집한다.
 
 ### 4.2 근거 질의응답 (C03, C07)
+
+변경(2026-10-22, 구현 전): 검색 도구는 임베딩 검색 전에 질문에서 "(년도) (회차) (N번)"을 파싱해 라벨이 일치하는 청크를 우선 근거로 넣는다. 이 근거도 상한(12개·약 8,000자)에 포함한다. 인용 채우기는 자료 kind에 따라 page 또는 절 번호·절 제목을 넣는다.
 
 서비스가 answer_graph를 실행한다. 아래는 정상 경로이며 재생성·보류·오류 분기는 3.1절을 따른다.
 
@@ -240,6 +246,8 @@ SELECT c.* FROM chunks c
 
 ### 4.4 퀴즈 생성·채점 (C09, C10)
 
+변경(2026-10-22, 구현 전): 생성 요청의 format이 short이면 문항 서브그래프가 설명·정답·허용 답안을 만들고 코드가 허용 답안 비어 있음·중복·정답 포함 여부를 검증한다. 채점 서비스는 공백·대소문자·괄호 정규화 후 일치로 판정하고, 오답의 "정답으로 처리"는 reviews.overridden_at과 attempts 정답 여부를 한 트랜잭션으로 고친다. 기본 워크스페이스는 document_topics의 출제 수로 가중 추출하고 코드 분석 3항목은 뺀다.
+
 변경(2026-10-22): [퀴즈 변경 PRD](quiz-customization-prd.md)를 적용한다. 세부 검증 결과는 [변경 통합 기록](quiz-customization-integration.md)에 둔다.
 
 - 설정: 엄격한 정수 1~10문항(기본 5), 난이도 `easy|medium|hard`(기본 `medium`). 난이도는 생성·조회·제출·목록에 포함하고 이전 DB 행은 `NULL`로 이관한다.
@@ -262,6 +270,8 @@ SELECT c.* FROM chunks c
 
 ## 5. 데이터 모델 보완
 
+변경(2026-10-22, 구현 전): 텍스트 자료·절·출제기준 태그·단답형 컬럼은 [전환 PRD 4절](2026-10-22-02-ipe-practical-prd.md)과 기획서 5절을 따른다. 위치 번호 재사용 결정은 ADR 0003.
+
 v1.1 5절 테이블을 그대로 쓰고 다음만 더한다.
 
 - **[P5 결정]** 인덱스: `chunks(source_type, source_id)`, `documents(workspace_id)`, `workspace_notes(workspace_id)`. `reviews.question_id` UNIQUE.
@@ -274,6 +284,8 @@ v1.1 5절 테이블을 그대로 쓰고 다음만 더한다.
 - ID는 uuid4 문자열.
 
 ## 6. GMS 어댑터와 Langfuse
+
+변경(2026-10-22): 업로드한 수험서 발췌가 Langfuse 클라우드에 본문째 기록되는 것을 허용했다(사용자 결정, ADR 0003). 마스킹은 없다. 공개 배포나 타인 자료를 받으면 다시 결정한다.
 
 HTTP 어댑터는 새로 작성한다. GMS의 채팅·임베딩 경로, 인증 헤더, 요청·응답 형식은 첫날 제공 문서와 실제 호출로 확인한다. JSON schema 지정이 지원되면 사용하고, 지원되지 않으면 JSON 출력 지시와 Pydantic 검증을 사용한다. 모델이 반환한 문서 ID·페이지 번호는 신뢰하지 않고 검색 근거에서 채운다.
 
